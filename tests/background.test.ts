@@ -17,6 +17,7 @@ test('background adapter persists batches across restart, keeps keys private, an
   let holdResponse = false;
   let pendingSignal: AbortSignal | undefined;
   const progressMessages: any[] = [];
+  const seedReads: string[] = [];
   const startWorker = () => {
     let handler!: (message: unknown, sender: any, respond: (value: any) => void) => boolean | undefined;
     runInNewContext(bundle.outputFiles[0]!.text, {
@@ -29,7 +30,11 @@ test('background adapter persists batches across restart, keeps keys private, an
       },
       URL, AbortController, setTimeout, clearTimeout, console,
       fetch: async (url: string, init: RequestInit) => {
-        if (url === 'chrome-extension://test-extension/seed.json') return new Response(JSON.stringify({
+        if (url.startsWith('chrome-extension://test-extension/')) seedReads.push(url);
+        if (url === 'chrome-extension://test-extension/seed/index.json') return new Response(JSON.stringify({
+          schemaVersion: 1, prompts: { 'name a shared seed answer': `seed/prompts/${'a'.repeat(64)}.json` },
+        }));
+        if (url === `chrome-extension://test-extension/seed/prompts/${'a'.repeat(64)}.json`) return new Response(JSON.stringify({
           schemaVersion: 1, source: 'fixture', days: {}, collections: { fixture: {
             kind: 'shared-file', importedAt: '2026-10-29T00:00:00Z', sourceFile: 'friend.json',
             prompts: [{ text: 'Name a shared seed answer', key: 'name a shared seed answer', answers: [
@@ -60,12 +65,17 @@ test('background adapter persists batches across restart, keeps keys private, an
   const seedIndex = await worker.send({ type: 'KRILLIONBOT_SEED' });
   assert.deepEqual(Array.from(seedIndex.promptKeys), ['name a shared seed answer']);
   assert.equal(seedIndex.database, undefined, 'Full source bank is never sent across the extension message channel');
+  assert.equal(seedReads.length, 1, 'Startup reads only the index');
   const seedResult = await worker.send({ type: 'KRILLIONBOT_RESOLVE', prompt: 'Name a shared seed answer', excluded: ['Café'] });
   assert.equal(seedResult.candidates[0].text, 'Tea'); assert.equal(seedResult.networkUsed, false); assert.equal(calls, 0);
+  assert.equal(seedReads.length, 2, 'Only the matching question is loaded');
+  await worker.send({ type: 'KRILLIONBOT_RESOLVE', prompt: 'Name a shared seed answer', excluded: [] });
+  assert.equal(seedReads.length, 2, 'Repeated question lookups reuse the local cache');
   await worker.send({ type: 'KRILLIONBOT_SAVE_CONFIG', settings: { ...DEFAULT_SETTINGS, enabled: true, model: 'mock-model' }, apiKey: 'mock-secret' }, worker.popup as any);
   const prompt = 'Name a distilled spirit or liqueur';
   const first = await worker.send({ type: 'KRILLIONBOT_RESOLVE', prompt, excluded: [] });
   assert.equal(first.candidates[0].source, 'llm'); assert.equal(calls, 1);
+  assert.equal(seedReads.length, 2, 'Unknown prompts do not fetch question files');
   assert.ok(!JSON.stringify(Object.fromEntries(localData)).includes('mock-secret'));
   const config = await worker.send({ type: 'KRILLIONBOT_CONFIG' }, worker.popup as any);
   assert.equal(config.hasKey, true); assert.ok(!JSON.stringify(config).includes('mock-secret'));

@@ -4,6 +4,9 @@ export function extensionErrorMessage(error: unknown): string {
   if (/extension context invalidated/i.test(message)) {
     return 'Extension was reloaded or updated. Refresh the Krillion tab, then enable the bot again.';
   }
+  if (/message exceeded maximum allowed size/i.test(message)) {
+    return 'Extension message is too large. Reload the updated extension, refresh the Krillion tab, then enable again.';
+  }
   if (/receiving end does not exist|could not establish connection|message (?:port|channel).*closed|background did not respond/i.test(message)) {
     return 'Extension background is unavailable. Reload the extension, refresh the Krillion tab, then enable again.';
   }

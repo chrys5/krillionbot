@@ -118,7 +118,7 @@ diagnostics.textContent = 'Copy diagnostics';
 shadow.querySelector('section')!.append(diagnostics);
 diagnostics.addEventListener('click', () => {
   const state = latest?.type === 'state' ? latest.state : null;
-  const safe = { version: '0.3.1', status: current, autoJoin: { enabled: autoJoinEnabled, paused: autoJoinPaused, message: autoJoinLabel.textContent },
+  const safe = { version: '0.3.2', status: current, autoJoin: { enabled: autoJoinEnabled, paused: autoJoinPaused, message: autoJoinLabel.textContent },
     game: state ? { phase: state.phase, category: state.category, observedVersion: state.version } : null,
     input: document.querySelector<HTMLInputElement>('.pf-root input[aria-label="Your answer"]')?.placeholder ?? null };
   void navigator.clipboard.writeText(JSON.stringify(safe, null, 2)).then(

@@ -1,7 +1,6 @@
-import type { SeedDatabase } from '../data/types.js';
 import { AnswerCache, type KeyValueStore } from '../llm/cache.js';
 import { DEFAULT_SETTINGS, createGenerator, validateSettings, type LlmSettings } from '../llm/provider.js';
-import { SeedLookup } from '../resolver/seed-lookup.js';
+import { BundledSeed } from '../resolver/bundled-seed.js';
 import { AUTO_JOIN_KEY } from './auto-join.js';
 
 const SETTINGS = 'krillionbot:settings:v1';
@@ -16,12 +15,11 @@ const store = (area: chrome.storage.StorageArea): KeyValueStore => ({
 });
 const cache = new AnswerCache(store(chrome.storage.local), store(chrome.storage.session), createGenerator());
 const lookups = new Map<string, AbortController>();
-let seed: Promise<SeedDatabase> | null = null;
-let seedLookup: Promise<SeedLookup> | null = null;
-const getSeed = () => seed ??= fetch(chrome.runtime.getURL('seed.json')).then(async response => {
+const seed = new BundledSeed(async path => {
+  const response = await fetch(chrome.runtime.getURL(path));
   if (!response.ok) throw new Error('Bundled seed database could not be loaded');
-  return response.json() as Promise<SeedDatabase>;
-}).catch(error => { seed = null; throw error; });
+  return response.json();
+});
 const settings = async () => validateSettings((await chrome.storage.local.get(SETTINGS))[SETTINGS] ?? DEFAULT_SETTINGS);
 const credential = async (config: LlmSettings) => {
   const key = (await chrome.storage.session.get(CREDENTIAL))[CREDENTIAL];
@@ -55,9 +53,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     }
     if (lookupAbort?.signal.aborted) throw new Error('Lookup cancelled');
     if (request.type === 'KRILLIONBOT_SEED' && isGame) {
-      seedLookup ??= getSeed().then(database => new SeedLookup(database)).catch(error => { seedLookup = null; throw error; });
-      // Send a small question index; answer lookup stays with the full bank in this worker.
-      return { promptKeys: (await seedLookup).promptKeys() };
+      // Only the small index crosses the message channel; question files load on demand.
+      return { promptKeys: await seed.promptKeys() };
     }
     if (request.type === 'KRILLIONBOT_CONFIG' && isPopup) {
       const config = await settings();
@@ -90,8 +87,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     }
     if ((request.type === 'KRILLIONBOT_RESOLVE' && isGame || request.type === 'KRILLIONBOT_TEST_LLM' && isPopup) &&
         validPrompt(request.prompt)) {
-      seedLookup ??= getSeed().then(database => new SeedLookup(database)).catch(error => { seedLookup = null; throw error; });
-      const candidates = (await seedLookup).lookup(request.prompt, { used: excludedAnswers(request.excluded), maxLength: 60 });
+      const candidates = await seed.lookup(request.prompt, { used: excludedAnswers(request.excluded), maxLength: 60 });
+      if (lookupAbort?.signal.aborted) throw new Error('Lookup cancelled');
       if (candidates.length) return { candidates, message: 'Seed candidates available; no provider request needed.',
         networkUsed: false, ...await cache.metrics() };
       const config = await settings();

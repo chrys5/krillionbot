@@ -8,7 +8,7 @@ const files: Record<string, [string, string]> = {
   '/fixture.js': ['build/fixture.js', 'text/javascript'],
   '/extension/bridge.js': ['build/extension/bridge.js', 'text/javascript'],
   '/extension/content.js': ['build/extension/content.js', 'text/javascript'],
-  '/extension/seed.json': ['build/extension/seed.json', 'application/json'],
+  '/extension/seed.json': ['data/seed.json', 'application/json'],
 };
 const server = createServer(async (request, response) => {
   const entry = files[new URL(request.url ?? '/', 'http://127.0.0.1').pathname];

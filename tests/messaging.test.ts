@@ -15,6 +15,7 @@ test('background messaging diagnoses invalidated contexts, unavailable workers, 
     assert.deepEqual(await backgroundRequest({ type: 'KRILLIONBOT_RECORD' }), { saved: true });
     for (const [error, expected] of [
       ['Extension context invalidated.', /Refresh the Krillion tab/],
+      ['Message exceeded maximum allowed size of 64MiB.', /message is too large/],
       ['Could not establish connection. Receiving end does not exist.', /background is unavailable/],
       ['The message port closed before a response was received.', /background is unavailable/],
       ['QUOTA_BYTES quota exceeded', /storage is full/],
