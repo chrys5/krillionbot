@@ -5,7 +5,7 @@ import { build } from 'esbuild';
 import { AutoJoin, joinAction } from '../src/extension/auto-join.js';
 
 function fixture(html: string) {
-  const dom = new JSDOM(html, { url: 'https://krillion.io/party' });
+  const dom = new JSDOM(html, { url: 'https://krillion.io/party/TEST' });
   let now = 0;
   const clicks: string[] = [], messages: string[] = [];
   dom.window.document.addEventListener('click', event => {
@@ -38,12 +38,32 @@ test('auto-join defaults off, delays actions, avoids repeated clicks, pauses and
   } finally { f.dom.window.close(); }
 });
 
+test('auto-join excludes the Party landing page and resets the action delay when returning to a room', () => {
+  const f = fixture('<button>JOIN NEXT GAME</button>');
+  try {
+    f.join.setEnabled(true); f.join.tick(); f.advance(999);
+    for (const path of ['/party', '/party/', '/party?mode=public', '/party/#lobby']) {
+      f.dom.reconfigure({ url: `https://krillion.io${path}` });
+      f.join.tick(); f.advance(5000);
+      assert.deepEqual(f.clicks, [], `No auto-join on ${path}`);
+    }
+    f.dom.window.document.body.innerHTML = '<button>Wake puffer</button><button>Join game</button>';
+    f.join.tick(); f.advance(5000);
+    assert.deepEqual(f.clicks, [], 'Landing-page exclusion applies to every auto-join action');
+    f.dom.window.document.body.innerHTML = '<button>JOIN NEXT GAME</button>';
+    f.dom.reconfigure({ url: 'https://krillion.io/party/TEST/' });
+    f.join.tick(); f.advance(999); assert.deepEqual(f.clicks, []);
+    f.advance(1); assert.deepEqual(f.clicks, ['JOIN NEXT GAME']);
+    f.advance(5000); assert.deepEqual(f.clicks, ['JOIN NEXT GAME']);
+  } finally { f.dom.window.close(); }
+});
+
 test('wake takes priority and replay, new opponent, rematch, and next games work across navigation', () => {
   const f = fixture('<button>Rematch</button><button>Wake the puffer 🐡</button>');
   try {
     f.join.setEnabled(true); f.join.tick(); f.advance(1000);
     assert.deepEqual(f.clicks, ['Wake the puffer 🐡']);
-    for (const text of ['Play again', 'Keep playing', 'New opponent', 'Rematch', 'Quick play', 'Join', 'Play now', 'Play']) {
+    for (const text of ['Play again', 'Keep playing', 'New opponent', 'Rematch', 'Quick play', 'Join', 'JOIN NEXT GAME', 'Play now', 'Play']) {
       f.dom.window.document.body.innerHTML = `<button>${text}</button>`;
       f.dom.reconfigure({ url: `https://krillion.io/party/${text === 'Join' ? 'ABCD' : 'TEST'}` });
       f.join.tick(); f.advance(3000);
@@ -53,6 +73,23 @@ test('wake takes priority and replay, new opponent, rematch, and next games work
     f.dom.reconfigure({ url: 'https://krillion.io/settings' });
     f.join.tick(); f.advance(5000); assert.equal(f.clicks.at(-1), 'Play');
   } finally { f.dom.window.close(); }
+});
+
+test('rematch takes precedence over new opponents and waits before switching opponents', () => {
+  for (const rematch of ['Rematch', 'Request rematch', 'Accept rematch']) {
+    for (const opponent of ['New opponent', 'Find new opponent', 'Find a new opponent']) {
+      const f = fixture(`<button>${opponent}</button><button id="rematch">${rematch}</button>`);
+      try {
+        f.join.setEnabled(true); f.join.tick(); f.advance(1000);
+        assert.deepEqual(f.clicks, [rematch]);
+        for (let i = 0; i < 5; i++) f.advance(3000);
+        assert.deepEqual(f.clicks, [rematch], 'Do not leave the opponent while rematch remains available');
+        f.dom.window.document.querySelector<HTMLButtonElement>('#rematch')!.disabled = true;
+        f.join.tick(); f.advance(1000);
+        assert.deepEqual(f.clicks, [rematch, opponent], 'New opponent remains available when rematch is unavailable');
+      } finally { f.dom.window.close(); }
+    }
+  }
 });
 
 test('ignores hidden, disabled, unrelated, external, extension, and active-round controls', () => {
@@ -66,14 +103,14 @@ test('ignores hidden, disabled, unrelated, external, extension, and active-round
     f.dom.window.document.body.innerHTML = '<div class="pf-root" data-phase="answering"><button>New opponent</button><button>Wake puffer</button></div>';
     f.join.tick(); f.advance(1000); assert.deepEqual(f.clicks, ['Wake puffer']);
     f.dom.window.document.body.innerHTML = '<button aria-label="Accept rematch">🐡</button>';
-    assert.equal(joinAction(f.dom.window.document.querySelector('button')!), 3);
+    assert.equal(joinAction(f.dom.window.document.querySelector('button')!), 2);
     f.join.tick(); f.advance(3000); assert.equal(f.clicks.length, 2);
   } finally { f.dom.window.close(); }
 });
 
 test('production content loads saved auto-join and Stop/Enable pauses and resumes it', async () => {
   const bundle = await build({ entryPoints: ['src/extension/content.ts'], bundle: true, write: false, platform: 'browser' });
-  const dom = new JSDOM('<button>Join game</button>', { url: 'https://krillion.io/party', runScripts: 'outside-only' });
+  const dom = new JSDOM('<button>JOIN NEXT GAME</button>', { url: 'https://krillion.io/party', runScripts: 'outside-only' });
   let now = 0;
   let tick!: () => void;
   const listeners: ((message: any, sender: any, respond: (value: any) => void) => boolean | undefined)[] = [];
@@ -101,12 +138,14 @@ test('production content loads saved auto-join and Stop/Enable pauses and resume
   try {
     dom.window.eval(bundle.outputFiles[0]!.text);
     await new Promise(resolve => setTimeout(resolve, 0));
-    tick(); now = 1000; tick(); assert.deepEqual(clicks, ['Join game']);
+    tick(); now = 1000; tick(); assert.deepEqual(clicks, [], 'Saved auto-join stays idle on the landing page');
+    dom.reconfigure({ url: 'https://krillion.io/party/TEST' });
+    tick(); now = 2000; tick(); assert.deepEqual(clicks, ['JOIN NEXT GAME']);
     await send('KRILLIONBOT_STOP');
     dom.window.document.querySelector('button')!.textContent = 'Play again';
-    now = 5000; tick(); now = 6000; tick(); assert.deepEqual(clicks, ['Join game']);
+    now = 5000; tick(); now = 6000; tick(); assert.deepEqual(clicks, ['JOIN NEXT GAME']);
     await send('KRILLIONBOT_ENABLE');
-    tick(); now = 7000; tick(); assert.deepEqual(clicks, ['Join game', 'Play again']);
+    tick(); now = 7000; tick(); assert.deepEqual(clicks, ['JOIN NEXT GAME', 'Play again']);
   } finally {
     dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close();
   }

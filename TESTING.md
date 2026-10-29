@@ -6,9 +6,11 @@ The on-page Krillion Bot panel can be moved by dragging its title bar. Its posit
 
 Reload the extension and refresh Krillion after updating. In the popup, turn on **Automatically join and keep playing**; this toggle saves immediately, independently of provider settings. It starts off on a new install.
 
-Open the Puffer Party mode you want. Auto-join uses visible Join/Quick play/Find match/Play controls, then Play again, New opponent, Rematch, or Wake puffer when available. It stays in the mode exposed by the game; it does not choose a mode from menu cards. It waits one second for a stable control and at least three seconds between clicks. Hidden and disabled controls are ignored, and replay/join controls are ignored during an active answer round.
+Open the Puffer Party room you want. Auto-join runs only inside a room at `/party/<room>`; it stays idle on the main `/party` page, including `/party/` and URLs with queries or fragments. Enter a room yourself first. Inside the room, auto-join uses visible Join/Join next game/Quick play/Find match/Play controls, then Play again, New opponent, Rematch, or Wake puffer when available. It stays in the mode exposed by the game; it does not choose a mode from menu cards. It waits one second for a stable control and at least three seconds between clicks. Returning from the main page starts a fresh one-second wait. Hidden and disabled controls are ignored, and replay/join controls are ignored during an active answer round.
 
 **Stop** pauses auto-join in the current tab; **Enable** resumes the saved setting and enables the answer bot. Turning the toggle off disables auto-join. The toggle persists across page reloads; answer submission still requires Enable after a full page reload. With auto-join on, an already-enabled answer bot resumes after a game connection is replaced and a fresh game state arrives.
+
+Rematch, Request rematch, and Accept rematch take precedence over New opponent and Find new opponent. After requesting a rematch, auto-join waits while a visible, enabled rematch control remains available; it does not switch opponents during that wait. New opponent becomes eligible when rematch is unavailable.
 
 Local tests cover mocked join/replay/wake transitions, duplicate prevention, hidden/disabled controls, setting persistence, and the production content script's Stop/Enable behavior. Live button labels still need verification in Chrome.
 
@@ -90,13 +92,13 @@ Seed-based automatic submission has been verified by the user. LLM-generated ans
 - **Preparing answer; waiting for the Send button:** the controller is allowing the game's controlled input to render. It rechecks category, turn, used answers and manual edits before clicking. If Send stays unavailable for 1 second, it removes its own abandoned text and retries, up to three preparations per turn. It stays enabled and resumes on the next turn; manual edits are preserved.
 - **Connection/state interrupted, incomplete used list, or no result:** stop, refresh, and enable again. Recovery is deferred.
 - **Errors:** check the extension's **Errors** button at `chrome://extensions`, the service worker's **Inspect** link, or the Krillion tab's DevTools Console.
-- **Message exceeded maximum allowed size of 64MiB:** rebuild, reload the extension card, and refresh every open Krillion tab. Confirm copied diagnostics show **0.3.3**. This version loads local answers per question and sends only a small index and candidate batches through extension messages.
+- **Message exceeded maximum allowed size of 64MiB:** rebuild, reload the extension card, and refresh every open Krillion tab. Confirm copied diagnostics show **0.3.4**. This version loads local answers per question and sends only a small index and candidate batches through extension messages.
 
 Click **Copy diagnostics** in the in-page bot panel and paste the result back here with what you expected to happen. It includes the bot status, category, phase, and input placeholder; it excludes account credentials, chat, player lists, and socket URLs.
 
 After a code update: run `npm run build:extension`, click **Reload** on the extension card, and refresh Krillion. Avoid Remove/reinstall for ordinary development updates.
 
-After upgrading from the old stuck-input bug, clear any text left by that old version once before enabling. The new controller cannot safely claim ownership of text that predates it. Extension reload clears the session API key; re-enter it in the popup if another LLM request is needed. Confirm diagnostics show version **0.3.3**.
+After upgrading from the old stuck-input bug, clear any text left by that old version once before enabling. The new controller cannot safely claim ownership of text that predates it. Extension reload clears the session API key; re-enter it in the popup if another LLM request is needed. Confirm diagnostics show version **0.3.4**.
 
 Report back with:
 

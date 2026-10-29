@@ -7,9 +7,9 @@ export function joinAction(element: Element): number | null {
   const text = label(element);
   if (/^wake (?:the |your )?puffer$/.test(text)) return 0;
   if (/^(?:play again|keep playing)$/.test(text)) return 1;
-  if (/^(?:find (?:a )?)?new opponent$/.test(text)) return 2;
-  if (/^(?:request |accept )?rematch$/.test(text)) return 3;
-  if (/^(?:join|quick join|quick play|find (?:a )?match|play|play now)$/.test(text) ||
+  if (/^(?:request |accept )?rematch$/.test(text)) return 2;
+  if (/^(?:find (?:a )?)?new opponent$/.test(text)) return 3;
+  if (/^(?:join|join next game|quick join|quick play|find (?:a )?match|play|play now)$/.test(text) ||
       /^join (?:a |the )?(?:game|match|queue|lobby)$/.test(text)) return 4;
   return null;
 }
@@ -38,7 +38,10 @@ export class AutoJoin {
   }
 
   tick(): void {
-    if (!this.enabled || !/^\/party(?:\/|$)/.test(this.document.location.pathname)) return;
+    if (!this.enabled || !/^\/party\/[^/]+\/?$/.test(this.document.location.pathname)) {
+      this.candidate = null;
+      return;
+    }
     const controls = [...this.document.querySelectorAll<HTMLElement>('button, a[href], [role="button"]')]
       .filter(element => !element.closest('#krillionbot-controls') && this.visible(element) &&
         !element.matches(':disabled, [aria-disabled="true"]') && joinAction(element) !== null &&
@@ -48,7 +51,10 @@ export class AutoJoin {
       .sort((a, b) => joinAction(a)! - joinAction(b)!);
     const screen = this.document.location.pathname + '|' + controls.map(element => label(element)).sort().join('|');
     if (screen !== this.screen) { this.screen = screen; this.attempted.clear(); }
-    const target = controls.find(element => !this.attempted.has(label(element))) ?? null;
+    const rematchAvailable = controls.some(element => joinAction(element) === 2);
+    const target = controls.find(element => !this.attempted.has(label(element)) &&
+      // Keep waiting for rematch rather than switching opponents after requesting it.
+      !(rematchAvailable && joinAction(element) === 3)) ?? null;
     if (target !== this.candidate) { this.candidate = target; this.since = this.now(); return; }
     if (!target || this.now() - this.since < 1000 || this.now() - this.lastClick < 3000) return;
     this.attempted.add(label(target)); this.lastClick = this.now();
