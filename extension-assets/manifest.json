@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Krillion Bot (local MVP)",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "minimum_chrome_version": "111",
   "description": "Seed, confirmed history, cached suggestions and configurable LLM fallback for Puffer Party.",
   "permissions": ["storage"],

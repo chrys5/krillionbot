@@ -33,7 +33,7 @@ const credential = async (config: LlmSettings) => {
 };
 const validPrompt = (prompt: unknown): prompt is string => typeof prompt === 'string' && !!prompt.trim() && prompt.length <= 1000;
 const excludedAnswers = (value: unknown): string[] => Array.isArray(value)
-  ? value.filter((s): s is string => typeof s === 'string' && s.length <= 300).slice(0, 300) : [];
+  ? value.filter((s): s is string => typeof s === 'string' && s.length <= 300).slice(0, 1000) : [];
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
   if (!message || typeof message !== 'object' || !('type' in message) || sender.id !== chrome.runtime.id) return;
@@ -112,7 +112,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
       if (candidates.length) return { candidates, message: 'Seed candidates available; no provider request needed.',
         networkUsed: false, ...await cache.metrics() };
       const config = await settings();
-      const result = await cache.resolve(request.prompt, excludedAnswers(request.excluded), config, await credential(config), request.allowNetwork !== false, {
+      const excluded = await seed.expandExcluded(request.prompt, excludedAnswers(request.excluded));
+      const result = await cache.resolve(request.prompt, excluded, config, await credential(config), request.allowNetwork !== false, {
         ...(lookupAbort ? { signal: lookupAbort.signal } : {}),
         onProgress: progress => {
           if (sender.tab?.id !== undefined && request.requestId) {

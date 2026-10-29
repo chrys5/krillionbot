@@ -1,4 +1,5 @@
 import { normalize } from '../data/normalize.js';
+import { AnswerMatcher } from '../data/answer-matching.js';
 import type { SeedDatabase, SeedPack, SeedPrompt } from '../data/types.js';
 import { seedRecords, type SeedRecord } from '../data/records.js';
 
@@ -21,6 +22,7 @@ export interface SeedCandidate {
 export class SeedLookup {
   // Index prompt references, not a second copy of the entire answer corpus.
   private readonly index = new Map<string, { prompt: SeedPrompt; record: SeedRecord }[]>();
+  private compiled: { prompt: string; answers: SeedCandidate[]; matcher: AnswerMatcher } | null = null;
 
   constructor(database: SeedDatabase) {
     for (const record of seedRecords(database)) {
@@ -35,7 +37,24 @@ export class SeedLookup {
   lookup(prompt: string, options: {
     used?: Iterable<string>; rejected?: Iterable<string>; limit?: number; maxLength?: number;
   } = {}): SeedCandidate[] {
-    const excluded = new Set([...options.used ?? [], ...options.rejected ?? []].map(normalize));
+    const { answers, matcher } = this.compile(prompt);
+    const excluded = matcher.blocked([...options.used ?? [], ...options.rejected ?? []]);
+    const seen = new Set<string>();
+    return answers.filter(answer => answer.text.length <= (options.maxLength ?? Infinity) &&
+      !excluded.has(matcher.key(answer.text))).filter(answer => {
+        const key = matcher.key(answer.text);
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      }).slice(0, options.limit ?? 10);
+  }
+
+  expandExcluded(prompt: string, answers: Iterable<string>): string[] {
+    return this.compile(prompt).matcher.expand(answers);
+  }
+
+  private compile(prompt: string) {
+    const promptKey = normalize(prompt);
+    if (this.compiled?.prompt === promptKey) return this.compiled;
     const records = [...this.index.get(normalize(prompt)) ?? []].sort((a, b) =>
       a.record.priority - b.record.priority ||
       Date.parse(b.prompt.lastSeen ?? b.record.date) - Date.parse(a.prompt.lastSeen ?? a.record.date));
@@ -49,7 +68,7 @@ export class SeedLookup {
         ...(sourceFile === undefined ? {} : { sourceFile }) };
       for (const answer of entry.answers) {
         const key = normalize(answer.text);
-        if (!candidates.has(key)) candidates.set(key, { ...answer, date, sourceUrl, sourceKind, source: 'seed',
+        if (!candidates.has(key)) candidates.set(key, { ...answer, aliases: [...answer.aliases], date, sourceUrl, sourceKind, source: 'seed',
           ...(answer.note ? { noteSource } : {}),
           ...(sourceFile === undefined ? {} : { sourceFile }),
           ...(pack === undefined ? {} : { pack, chapter: chapter! }) });
@@ -61,11 +80,11 @@ export class SeedLookup {
         }
       }
     }
-    return [...candidates.values()]
-      .filter(answer => answer.text.length <= (options.maxLength ?? Infinity) &&
-        ![answer.text, ...answer.aliases].some(text => excluded.has(normalize(text))))
+    const matcher = new AnswerMatcher(prompt, [...candidates.values()].map(answer => [answer.text, ...answer.aliases]));
+    const answers = [...candidates.values()]
       .sort((a, b) => b.score - a.score || a.text.length - b.text.length || a.text.localeCompare(b.text))
-      .slice(0, options.limit ?? 10);
+      .map(answer => ({ ...answer, aliases: matcher.aliases(answer.text) }));
+    return this.compiled = { prompt: promptKey, answers, matcher };
   }
 
   hasPrompt(prompt: string): boolean { return this.index.has(normalize(prompt)); }

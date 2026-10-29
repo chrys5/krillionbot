@@ -1,4 +1,5 @@
 import { normalize } from '../data/normalize.js';
+import { AnswerMatcher } from '../data/answer-matching.js';
 import { PROMPT_SCHEMA_VERSION, type Generate, type LlmSettings, type GeneratedCandidate } from './provider.js';
 import { fitsConstraints, isCurrentFactQuestion, questionConstraints, suggestionTtlMs } from './constraints.js';
 import { cancelled, failureInfo, ProviderError, type FailureInfo } from './failure.js';
@@ -79,9 +80,10 @@ export class AnswerCache {
     await this.serial(async () => {
       const key = historyKey(prompt);
       const history = historyValue(await this.store.get(key));
-      const normalized = normalize(text);
-      history.accepted = history.accepted.filter(answer => normalize(answer.text) !== normalized);
-      history.invalid = history.invalid.filter(answer => normalize(answer.text) !== normalized && answer.at > this.now() - TTL);
+      const matcher = new AnswerMatcher(prompt);
+      const normalized = matcher.key(text);
+      history.accepted = history.accepted.filter(answer => matcher.key(answer.text) !== normalized);
+      history.invalid = history.invalid.filter(answer => matcher.key(answer.text) !== normalized && answer.at > this.now() - TTL);
       if (result === 'accepted') history.accepted.unshift({ text, at: this.now() });
       else history.invalid.push({ text, at: this.now() });
       history.accepted = history.accepted.slice(0, 200);
@@ -93,14 +95,23 @@ export class AnswerCache {
   async resolve(prompt: string, excluded: string[], settings: LlmSettings, apiKey: string,
     allowNetwork = true, options: ResolveOptions = {}): Promise<FallbackResult> {
     const history = historyValue(await this.store.get(historyKey(prompt)));
-    const blocked = new Set([...excluded, ...history.invalid.filter(a => a.at > this.now() - TTL).map(a => a.text)].map(normalize));
+    const matcher = new AnswerMatcher(prompt);
+    const blockedTexts = matcher.expand([...excluded, ...history.invalid.filter(a => a.at > this.now() - TTL).map(a => a.text)]);
+    const blocked = matcher.blocked(blockedTexts);
     const constraints = questionConstraints(prompt);
-    const eligible = (answers: GeneratedCandidate[]) => answers.filter(a => !blocked.has(normalize(a.text)) && fitsConstraints(a.text, constraints));
+    const eligible = (answers: GeneratedCandidate[]) => {
+      const seen = new Set<string>();
+      return answers.filter(a => {
+        const key = matcher.key(a.text);
+        if (blocked.has(key) || seen.has(key) || !fitsConstraints(a.text, constraints)) return false;
+        seen.add(key); return true;
+      });
+    };
     const result = async (answers: GeneratedCandidate[], source: AnswerCandidate['source'], message: string): Promise<FallbackResult> => ({
-      candidates: answers.map(answer => ({ ...answer, aliases: [], source })), message, networkUsed: source === 'llm', ...await this.metrics(),
+      candidates: answers.map(answer => ({ ...answer, aliases: matcher.aliases(answer.text), source })), message, networkUsed: source === 'llm', ...await this.metrics(),
     });
-    const confirmed = eligible(history.accepted.filter(a => !isCurrentFactQuestion(prompt) || a.at > this.now() - suggestionTtlMs(prompt))
-      .map(a => ({ text: a.text })));
+    const accepted = history.accepted.filter(a => !isCurrentFactQuestion(prompt) || a.at > this.now() - suggestionTtlMs(prompt));
+    const confirmed = eligible(accepted.map(a => ({ text: a.text })));
     if (confirmed.length) return result(confirmed, 'history', 'Reusing game-confirmed history');
     const key = cacheKey(prompt, settings);
     const entry = await this.store.get(key) as CacheEntry | undefined;
@@ -137,7 +148,10 @@ export class AnswerCache {
     if (!job) {
       const created: Job = { promise: Promise.resolve({ candidates: [], attempts: [] }), controller: new AbortController(), subscribers: new Set(), settled: false };
       created.promise = (async () => {
-        const generated = await generateWithRetries(this.generate, { prompt, excluded: [...blocked] }, settings, apiKey, {
+        // Keep prior suggestions distinct from room exclusions: another room may still use them.
+        const known = matcher.expand([...(entry && entry.expiresAt > this.now() ? entry.candidates.map(a => a.text) : []),
+          ...accepted.map(a => a.text)]);
+        const generated = await generateWithRetries(this.generate, { prompt, excluded: blockedTexts, known }, settings, apiKey, {
           signal: created.controller.signal, now: this.now,
           onProgress: progress => {
             created.lastProgress = progress;
@@ -162,7 +176,7 @@ export class AnswerCache {
         if (answers.length) await this.serial(async () => {
           const previous = await this.store.get(key) as CacheEntry | undefined;
           const old = previous && previous.expiresAt > this.now() ? previous.candidates : [];
-          const merged = new Map([...old, ...answers].map(a => [normalize(a.text), a]));
+          const merged = new Map([...old, ...answers].map(a => [matcher.key(a.text), a]));
           await this.store.set(key, { createdAt: this.now(), expiresAt: this.now() + suggestionTtlMs(prompt), candidates: [...merged.values()].slice(-100) });
         });
         return generated;

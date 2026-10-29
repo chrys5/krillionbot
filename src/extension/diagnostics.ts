@@ -1,6 +1,6 @@
 import type { KeyValueStore } from '../llm/cache.js';
 
-export const VERSION = '0.3.6';
+export const VERSION = '0.3.7';
 export const DIAGNOSTICS_KEY = 'krillionbot:diagnostics:v1';
 export const AUTO_RECOVERY_KEY = 'krillionbot:auto-recovery:v1';
 export interface DiagnosticEvent {

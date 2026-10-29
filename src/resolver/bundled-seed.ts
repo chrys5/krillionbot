@@ -23,10 +23,10 @@ export class BundledSeed {
 
   async promptKeys(): Promise<string[]> { return Object.keys((await this.getIndex()).prompts); }
 
-  async lookup(prompt: string, options: Parameters<SeedLookup['lookup']>[1] = {}) {
+  private async forPrompt(prompt: string): Promise<SeedLookup | null> {
     const key = normalize(prompt);
     const index = await this.getIndex();
-    if (!Object.hasOwn(index.prompts, key)) { this.current = null; return []; }
+    if (!Object.hasOwn(index.prompts, key)) { this.current = null; return null; }
     // Keep one promise so turns and retries share both pending and completed loads.
     if (this.current?.key !== key) {
       this.current = { key, lookup: this.read(index.prompts[key]!).then(value => {
@@ -39,11 +39,19 @@ export class BundledSeed {
     }
     const current = this.current;
     try {
-      return (await current.lookup).lookup(prompt, options);
+      return await current.lookup;
     } catch (error) {
       // A failed earlier question must not discard a newer question's load.
       if (this.current === current) this.current = null;
       throw error;
     }
+  }
+
+  async lookup(prompt: string, options: Parameters<SeedLookup['lookup']>[1] = {}) {
+    return (await this.forPrompt(prompt))?.lookup(prompt, options) ?? [];
+  }
+
+  async expandExcluded(prompt: string, answers: string[]): Promise<string[]> {
+    return (await this.forPrompt(prompt))?.expandExcluded(prompt, answers) ?? answers;
   }
 }

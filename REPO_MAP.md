@@ -97,7 +97,8 @@ These include both runtime-safe shared modules and Node-only maintenance modules
 | File | Responsibility |
 | --- | --- |
 | `types.ts` | Seed schema: answers/prompts, daily snapshots, official chapters, imported collections, source metadata and import report types. |
-| `normalize.ts` | Shared Unicode/case/whitespace normalization used for question/answer identity. Preserves punctuation and restrictions. |
+| `normalize.ts` | Unicode/case/whitespace normalization for prompt identity and source records. Preserves punctuation and restrictions. |
+| `answer-matching.ts` | Runtime answer identity, accent/formatting folding, category-scoped equivalents, bidirectional source aliases, and spelling-question safeguards. Shared by seed, history/cache, provider validation, and submission checks. |
 | `records.ts` | Presents daily, official chapter and collection snapshots through one record interface, attaching provenance and source priority for lookup/statistics. |
 | `archive.ts` | Parses the daily archive index/pagination and seven-question daily pages with Cheerio; validates page identity, answer rows and tier counts. |
 | `update.ts` | Incremental daily-import orchestration, empty database creation and basic statistics. Fetches missing dates, preserves imported days, reports failures. |

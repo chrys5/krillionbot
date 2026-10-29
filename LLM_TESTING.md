@@ -11,7 +11,7 @@ Resolution order:
 3. Cached, unverified generated suggestions.
 4. A new provider request only if no eligible local fallback remains.
 
-Each request asks for about 20 candidate **strings**, with no generated types, rarity labels, scores, probabilities, or explanations. The JSON shape is:
+Each request asks for up to 40 distinct candidate **strings**, aiming for 40 when reliable answers exist, with no generated types, rarity labels, scores, probabilities, or explanations. Validation retains at most 40 and deduplicates answer equivalents. The JSON shape is:
 
 ```json
 {"candidates":["Gin","Rum","Vodka"]}
@@ -19,7 +19,11 @@ Each request asks for about 20 candidate **strings**, with no generated types, r
 
 The adapter sends the exact question, simple parsed constraints and excluded answers. Code validates shape, maximum length (60 characters), duplicates, and recognized prefix/suffix, quoted-substring, word-length and letter-bank constraints. It cannot establish factual correctness or game acceptance. Actual game feedback does that.
 
-The default output cap is 400 tokens. Defaults are a **5-second initial attempt**, **up to 3 HTTP attempts per lookup**, and a **15-second total retry budget**. Existing timeout settings (including 2000 ms) are preserved: use the popup's **Request limits** to change them. If a model spends its output budget on reasoning, use a faster text model or explicitly raise the cap. Provider capabilities and access must be checked against your account.
+The default output cap is 1,200 tokens. Saved limits are preserved: if the popup still shows 400, set **Maximum output tokens** to 1200 and save for larger batches. Defaults are a **5-second initial attempt**, **up to 3 HTTP attempts per lookup**, and a **15-second total retry budget**. Existing timeout settings (including 2000 ms) are preserved: use the popup's **Request limits** to change them. If a model spends its output budget on reasoning, use a faster text model or explicitly raise the cap. Provider capabilities and access must be checked against your account.
+
+The prompt includes `excludedAnswers` (used, rejected, unconfirmed and recent invalid answers, expanded with known equivalents; up to 1,000 strings) and `previouslySuggestedAnswers` (unexpired cached suggestions and confirmed history, expanded with equivalents; up to 500 strings). The model is asked to avoid alternate names and spelling/plural variants and supply fresh alternatives. Shared requests still apply each caller's current exclusions locally when results arrive.
+
+Answer matching handles accents/formatting plus a small category-specific set of country names, animal plurals, and vegetable equivalents. Source aliases are bidirectional and carry into fallback exclusions. Spelling/word/letter questions use strict spelling comparisons; symbols and numeric distinctions remain significant. This is deterministic matching, not general semantic or typo inference. New regression tests cover equivalent answers across seed/cache/history, an opponent's answer arriving during input preparation, repeat aliases, and second-batch prompt context. Reload the extension and refresh Krillion for live verification.
 
 ## Retry policy
 

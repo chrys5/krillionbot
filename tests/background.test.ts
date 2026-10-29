@@ -75,6 +75,10 @@ test('background adapter persists batches across restart, keeps keys private, an
   assert.equal(seedReads.length, 2, 'Only the matching question is loaded');
   await worker.send({ type: 'KRILLIONBOT_RESOLVE', prompt: 'Name a shared seed answer', excluded: [] });
   assert.equal(seedReads.length, 2, 'Repeated question lookups reuse the local cache');
+  await worker.send({ type: 'KRILLIONBOT_RECORD', prompt: 'Name a shared seed answer', answer: 'Coffee', result: 'accepted' });
+  const exhausted = await worker.send({ type: 'KRILLIONBOT_RESOLVE', prompt: 'Name a shared seed answer', excluded: ['CAFE', 'Tea'], allowNetwork: false });
+  assert.equal(exhausted.candidates.length, 0, 'Seed aliases also exclude their canonical answer from learned history');
+  assert.equal(calls, 0);
   await worker.send({ type: 'KRILLIONBOT_SAVE_CONFIG', settings: { ...DEFAULT_SETTINGS, enabled: true, model: 'mock-model' }, apiKey: 'mock-secret' }, worker.popup as any);
   const prompt = 'Name a distilled spirit or liqueur';
   const first = await worker.send({ type: 'KRILLIONBOT_RESOLVE', prompt, excluded: [] });

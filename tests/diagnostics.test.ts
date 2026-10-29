@@ -22,7 +22,7 @@ test('diagnostic history serializes concurrent writes, survives restart, scrubs 
     context: { stack: 'Error custom-provider-credential at worker.js:5' } });
   const entries = await new DiagnosticLog(store).read();
   assert.equal(entries.length, 11);
-  assert.equal(entries[0]!.tabId, 7); assert.equal(entries[0]!.version, '0.3.6');
+  assert.equal(entries[0]!.tabId, 7); assert.equal(entries[0]!.version, '0.3.7');
   assert.ok(Number.isFinite(Date.parse(entries[0]!.at)));
   const serialized = JSON.stringify(entries);
   for (const secret of ['private-key', 'private-header', 'manual text', 'private chat', 'secret-token', 'sk-example123', '?key=secret', 'custom-provider-credential']) {

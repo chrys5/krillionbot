@@ -1,4 +1,4 @@
-import { normalize } from '../data/normalize.js';
+import { AnswerMatcher } from '../data/answer-matching.js';
 import type { SeedLookup } from '../resolver/seed-lookup.js';
 import type { AnswerCandidate, FallbackResult, ResolveOptions } from '../llm/cache.js';
 import type { RetryProgress } from '../llm/retry.js';
@@ -117,6 +117,7 @@ export class BotController {
         return;
       }
       const answer = this.pending.answer;
+      const aliases = this.pending.aliases;
       const turn = this.pending.turn;
       clearTimeout(this.pending.timer);
       this.pending = null;
@@ -129,6 +130,7 @@ export class BotController {
       }
       else if (['miss', 'repeat'].includes(observation.why)) {
         this.rejected.add(answer);
+        for (const alias of aliases) this.rejected.add(alias);
         if (observation.why === 'miss') this.learn(answer, 'invalid');
       }
       else { this.stop(`Submission not confirmed (${observation.why || 'unknown result'}).`); return; }
@@ -174,7 +176,8 @@ export class BotController {
       this.used.add(answer);
     }
     if (this.pending) {
-      const appeared = used.some(answer => [this.pending!.answer, ...this.pending!.aliases].some(alias => normalize(alias) === normalize(answer)));
+      const matcher = new AnswerMatcher(state.category.text, [[this.pending.answer, ...this.pending.aliases]]);
+      const appeared = used.some(answer => matcher.key(answer) === matcher.key(this.pending!.answer));
       if (!appeared && state.holderSince === this.pending.turn) return;
       if (appeared) this.acceptedTurn = `${key}:${this.pending.turn}`;
       this.finishPending(appeared ? 'Answer appears in the used list; continuing from game state.' : 'Turn changed before submission acknowledgement.', 'info');
@@ -189,8 +192,14 @@ export class BotController {
     if (signature !== this.queueKey) {
       this.queue = this.lookup.lookup(state.category.text, { used: [...this.used, ...this.unconfirmed], rejected: this.rejected, maxLength: 60 });
       if (!this.queue.length) {
-        const blocked = new Set([...this.used, ...this.rejected, ...this.unconfirmed].map(normalize));
-        this.queue = this.external.filter(candidate => ![candidate.text, ...candidate.aliases].some(a => blocked.has(normalize(a))));
+        const matcher = new AnswerMatcher(state.category.text, this.external.map(candidate => [candidate.text, ...candidate.aliases]));
+        const blocked = matcher.blocked([...this.used, ...this.rejected, ...this.unconfirmed]);
+        const seen = new Set<string>();
+        this.queue = this.external.filter(candidate => {
+          const key = matcher.key(candidate.text);
+          if (blocked.has(key) || seen.has(key)) return false;
+          seen.add(key); return true;
+        });
       }
       this.queueKey = signature;
     }
@@ -208,7 +217,8 @@ export class BotController {
         const abort = new AbortController();
         this.lookupAbort = abort;
         this.update(`${reason} Checking seed/history/cache/LLM…`);
-        void this.fallback.resolve(state.category.text, [...this.used, ...this.rejected, ...this.unconfirmed], this.networkBatches < 2, {
+        const matcher = new AnswerMatcher(state.category.text, this.external.map(candidate => [candidate.text, ...candidate.aliases]));
+        void this.fallback.resolve(state.category.text, matcher.expand([...this.used, ...this.rejected, ...this.unconfirmed]), this.networkBatches < 2, {
           signal: abort.signal,
           onProgress: progress => {
             if (epoch !== this.epoch || !this.status.enabled) return;
@@ -260,6 +270,7 @@ export class BotController {
     const epoch = this.epoch;
     const candidate = this.queue[0]!;
     const answer = candidate.text;
+    const matcher = new AnswerMatcher(state.category.text, [[answer, ...candidate.aliases]]);
     try {
       const prepared = this.ownInput(dom.input, answer);
       prepared.writing = true;
@@ -282,7 +293,7 @@ export class BotController {
           this.retryInput(epoch); return;
         }
         const nowUsed = usedAnswers(this.state);
-        if (!nowUsed || nowUsed.some(text => [answer, ...candidate.aliases].some(alias => normalize(text) === normalize(alias)))) {
+        if (!nowUsed || nowUsed.some(text => matcher.key(text) === matcher.key(answer))) {
           this.queueKey = ''; return;
         }
         if (fresh.send && !fresh.send.disabled) break;

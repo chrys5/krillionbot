@@ -67,7 +67,9 @@ test('lookup unions sources without merging different restrictions, preserves co
   appendCollection(database, parseCompanion(companion, html, source, at));
   const unchanged = JSON.stringify(database);
   const lookup = new SeedLookup(database);
-  assert.deepEqual(lookup.lookup('NAME A THING').map(a => [a.text, a.score]), [['Café', 100], ['Tea', 60]]);
+  // Both fixture answers explicitly share the alias "Coffee", so runtime identity
+  // now offers the highest-ranked equivalent once while retaining both source rows.
+  assert.deepEqual(lookup.lookup('NAME A THING').map(a => [a.text, a.score]), [['Café', 100]]);
   assert.equal(lookup.lookup('Name a thing')[0]!.sourceFile, 'data/friend.json');
   assert.equal(lookup.lookup('Name a thing')[0]!.note, 'A source note');
   assert.deepEqual(lookup.lookup('Name a thing (not coffee)'), []);

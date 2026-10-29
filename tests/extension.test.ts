@@ -114,6 +114,47 @@ test('opponents used answers and aliases are excluded before submission', async 
   } finally { f.close(); }
 });
 
+test('a formatting variant arriving during input preparation prevents a stale submission', async () => {
+  const f = setup();
+  try {
+    f.input.addEventListener('input', () => {
+      if (f.input.value !== 'First') return;
+      const current = state(); current.version = 2; current.category!.accepted = 1;
+      current.events.push({ seq: 2, kind: 'pass', answer: 'F-i-r-s-t' });
+      f.bot.observe({ type: 'state', state: current });
+    });
+    f.bot.observe({ type: 'state', state: state() }); f.bot.enable();
+    await until(() => f.submissions.length === 1, 'fresh unused candidate');
+    assert.deepEqual(f.submissions, ['Second']);
+  } finally { f.close(); }
+});
+
+test('fallback aliases block canonical candidates from other sources after a repeat', async () => {
+  const exclusions: string[][] = [];
+  const f = setup({
+    resolve: async (_prompt, excluded) => {
+      exclusions.push(excluded);
+      return { candidates: exclusions.length === 1
+        ? [{ text: 'Coffee', aliases: ['Java'], source: 'llm' }]
+        : [{ text: 'Java', aliases: [], source: 'cache' }, { text: 'Tea', aliases: [], source: 'cache' }],
+      message: 'Suggestions', requests: 0, cacheHits: 0, networkUsed: false };
+    },
+    record: async () => {},
+  });
+  try {
+    const current = state();
+    current.category!.accepted = 3;
+    for (const answer of ['First', 'Second', 'Third']) current.events.push({ seq: current.events.length + 1, kind: 'pass', answer });
+    f.bot.observe({ type: 'state', state: current }); f.bot.enable();
+    await until(() => f.submissions.length === 1, 'first fallback answer');
+    assert.deepEqual(f.submissions, ['Coffee']);
+    f.bot.observe({ type: 'result', answer: 'Coffee', category: 'TEST:1:1', accepted: false, why: 'repeat' });
+    await until(() => f.submissions.length === 2, 'repeat backup');
+    assert.deepEqual(f.submissions, ['Coffee', 'Tea']);
+    assert.ok(exclusions[1]!.includes('Java'));
+  } finally { f.close(); }
+});
+
 test('confirmed rejection retries a backup; acceptance latches the turn', async () => {
   const f = setup();
   try {

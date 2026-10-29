@@ -11,7 +11,7 @@ class MemoryStore implements KeyValueStore {
 }
 const settings = { ...DEFAULT_SETTINGS, enabled: true, model: 'mock-text-model' };
 const question = 'Name a distilled spirit or liqueur';
-const batch = Array.from({ length: 20 }, (_, i) => `Candidate ${i + 1}`);
+const batch = Array.from({ length: 40 }, (_, i) => `Candidate ${i + 1}`);
 const jsonResponse = (answers = batch) => new Response(JSON.stringify({ status: 'completed', output: [
   { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ candidates: answers }) }] },
 ] }), { status: 200 });
@@ -22,13 +22,16 @@ test('Responses adapter requests only text candidates and sends constraints/excl
     calls++; assert.equal(url, 'https://api.openai.com/v1/responses');
     const body = JSON.parse(String(init?.body));
     assert.equal(body.text.format.schema.properties.candidates.items.type, 'string');
-    assert.equal(body.max_output_tokens, 400); assert.equal(body.store, false);
+    assert.equal(body.max_output_tokens, 1200); assert.equal(body.store, false);
+    assert.equal(body.text.format.schema.properties.candidates.maxItems, 40);
+    assert.match(body.instructions, /up to 40/);
     const input = JSON.parse(body.input);
     assert.equal(input.question, 'Name a word starting with Ch');
     assert.equal(input.constraints.startsWith, 'ch'); assert.deepEqual(input.excludedAnswers, ['Chair']);
+    assert.deepEqual(input.previouslySuggestedAnswers, ['Cheese']);
     return jsonResponse(['Chair', 'Chocolate', 'Spider']);
   }) as typeof fetch);
-  const result = await generate({ prompt: 'Name a word starting with Ch', excluded: ['Chair'] }, settings, 'mock-secret');
+  const result = await generate({ prompt: 'Name a word starting with Ch', excluded: ['Chair'], known: ['Cheese'] }, settings, 'mock-secret');
   // Provider validates constraints; selection/cache additionally filters excluded answers.
   assert.deepEqual(result.map(a => a.text), ['Chair', 'Chocolate']); assert.equal(calls, 1);
 });
@@ -37,7 +40,7 @@ test('Chat Completions adapter supports alternate endpoint, JSON mode and token 
   const generate = createGenerator((async (url, init) => {
     assert.equal(url, 'https://compatible.example/v1/chat/completions');
     const body = JSON.parse(String(init?.body));
-    assert.equal(body.model, 'another-model'); assert.equal(body.max_tokens, 400);
+    assert.equal(body.model, 'another-model'); assert.equal(body.max_tokens, 1200);
     assert.deepEqual(body.response_format, { type: 'json_object' });
     return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"candidates":["Gin"]}' } }] }));
   }) as typeof fetch);
@@ -58,15 +61,66 @@ test('candidate validation removes invalid shape, duplicates, excess length and 
   assert.equal(fitsConstraints('Boston', questionConstraints('Name a city ending in ton')), true);
 });
 
+test('candidate validation keeps up to forty distinct answers and filters equivalent variants', () => {
+  const answers = Array.from({ length: 45 }, (_, i) => `Answer ${i}`);
+  const result = cleanCandidates({ candidates: ['Spider-Man', 'Spiderman', ...answers] }, 'Name a character');
+  assert.equal(result.length, 40);
+  assert.deepEqual(result.slice(0, 3), [{ text: 'Spider-Man' }, { text: 'Answer 0' }, { text: 'Answer 1' }]);
+  assert.deepEqual(cleanCandidates({ candidates: ['USA', 'United States', 'Canada'] }, 'Name a country'),
+    [{ text: 'USA' }, { text: 'Canada' }]);
+});
+
+test('equivalent used answers are excluded from generated batches, cache, and persisted history', async () => {
+  const store = new MemoryStore(), session = new MemoryStore();
+  const prompt = 'Name a country';
+  const generate = async () => [{ text: 'USA' }, { text: 'United States' }, { text: 'Canada' }];
+  const cache = new AnswerCache(store, session, generate);
+  const fresh = await cache.resolve(prompt, ['United States of America'], settings, 'mock');
+  assert.deepEqual(fresh.candidates.map(a => a.text), ['Canada']);
+  const cached = await new AnswerCache(store, session, generate).resolve(prompt, ['U.S.'], settings, '');
+  assert.deepEqual(cached.candidates.map(a => a.text), ['Canada']);
+  await cache.record(prompt, 'USA', 'accepted');
+  const history = await cache.resolve(prompt, [], settings, '');
+  assert.equal(history.candidates[0]!.source, 'history');
+  assert.ok(history.candidates[0]!.aliases.includes('United States'));
+  assert.deepEqual((await cache.resolve(prompt, ['United States'], settings, '')).candidates.map(a => a.text), ['Canada']);
+  await cache.record(prompt, 'U.S.', 'invalid');
+  assert.deepEqual((await cache.resolve(prompt, [], settings, '')).candidates.map(a => a.text), ['Canada']);
+});
+
+test('next batch prompt includes expanded exclusions and all previous suggestions without leaking between rooms', async () => {
+  const store = new MemoryStore(), session = new MemoryStore();
+  const requests: { excluded: string[]; known?: string[] }[] = [];
+  const generate = async (request: { excluded: string[]; known?: string[] }) => {
+    requests.push(request);
+    return requests.length === 1 ? [{ text: 'USA' }, { text: 'Canada' }] : [{ text: 'Japan' }];
+  };
+  const cache = new AnswerCache(store, session, generate);
+  const prompt = 'Name a country';
+  await cache.resolve(prompt, [], settings, 'mock');
+  await cache.record(prompt, 'Canada', 'accepted');
+  await cache.record(prompt, 'Atlantis', 'invalid');
+  const topup = await cache.resolve(prompt, ['United States', 'Canada'], settings, 'mock');
+  assert.deepEqual(topup.candidates.map(a => a.text), ['Japan']);
+  assert.ok(requests[1]!.excluded.includes('USA'));
+  assert.ok(requests[1]!.excluded.includes('Atlantis'));
+  assert.ok(requests[1]!.known!.includes('USA'));
+  assert.ok(requests[1]!.known!.includes('Canada'));
+  const otherRoom = await cache.resolve(prompt, [], settings, '', false);
+  assert.equal(otherRoom.candidates[0]!.text, 'Canada');
+  const cachedOtherRoom = await cache.resolve(prompt, ['Canada'], settings, '', false);
+  assert.ok(cachedOtherRoom.candidates.some(a => a.text === 'USA'), 'Room exclusions do not permanently invalidate another room’s candidates');
+});
+
 test('whole batch persists across service instances and hits cache without a second provider call', async () => {
   const store = new MemoryStore(), session = new MemoryStore(); let calls = 0;
   const generate = createGenerator((async () => { calls++; return jsonResponse(); }) as typeof fetch);
   const first = new AnswerCache(store, session, generate);
   const generated = await first.resolve(question, [], settings, 'mock-key');
-  assert.equal(generated.candidates.length, 20); assert.equal(generated.candidates[0]!.source, 'llm');
+  assert.equal(generated.candidates.length, 40); assert.equal(generated.candidates[0]!.source, 'llm');
   const restarted = new AnswerCache(store, new MemoryStore(), generate);
   const reused = await restarted.resolve(' NAME A DISTILLED SPIRIT OR LIQUEUR ', [batch[0]!], settings, '');
-  assert.equal(reused.candidates.length, 19); assert.equal(reused.candidates[0]!.source, 'cache');
+  assert.equal(reused.candidates.length, 39); assert.equal(reused.candidates[0]!.source, 'cache');
   assert.equal(calls, 1); assert.equal(reused.requests, 1); assert.equal(reused.cacheHits, 1);
 });
 
@@ -79,7 +133,7 @@ test('simultaneous identical cache keys share a request even with different used
   for (let i = 0; i < 20 && !finish; i++) await new Promise(resolve => setTimeout(resolve, 1));
   finish(batch.map(text => ({ text })));
   const [a, b] = await Promise.all([one, two]);
-  assert.equal(calls, 1); assert.equal(a.candidates.length, 20); assert.equal(b.candidates.length, 19);
+  assert.equal(calls, 1); assert.equal(a.candidates.length, 40); assert.equal(b.candidates.length, 39);
 });
 
 test('actual acceptance promotes history; invalid is scoped and distinct from an excluded duplicate', async () => {
@@ -107,7 +161,7 @@ test('cache identity includes provider/model/schema and preserves question restr
   assert.notEqual(cacheKey(question, settings), cacheKey(question + ' starting with G', settings));
   assert.notEqual(cacheKey(question, settings), cacheKey(question, { ...settings, model: 'another' }));
   assert.notEqual(cacheKey(question, settings), cacheKey(question, { ...settings, baseUrl: 'https://other.example/v1' }));
-  assert.match(cacheKey(question, settings), /krillion-text-candidates-v1/);
+  assert.match(cacheKey(question, settings), /krillion-text-candidates-v2/);
 });
 
 test('expiry refreshes generated answers and current facts expire sooner', async () => {
