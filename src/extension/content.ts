@@ -4,6 +4,7 @@ import { cleanState, type Observation } from './protocol.js';
 import type { FallbackResult } from '../llm/cache.js';
 import { backgroundRequest } from './messaging.js';
 import { AUTO_JOIN_KEY, AutoJoin } from './auto-join.js';
+import { makeDraggablePanel } from './draggable-panel.js';
 
 const CHANNEL = 'krillionbot:party:v1';
 let bot: BotController | null = null;
@@ -20,7 +21,7 @@ let current: BotStatus = { enabled: false, message: 'Off', prompt: '', lastAnswe
 const panel = document.createElement('div');
 panel.id = 'krillionbot-controls';
 const shadow = panel.attachShadow({ mode: 'open' });
-shadow.innerHTML = `<style>:host{position:fixed;right:12px;top:70px;z-index:2147483647;font:13px system-ui}section{width:250px;border:1px solid #3f6c8b;border-radius:8px;background:#102338;color:#e9f5ff;padding:12px;box-shadow:0 3px 16px #0006}p{line-height:1.4;margin:8px 0;overflow-wrap:anywhere}button{font:inherit;margin-right:6px;padding:5px 10px;cursor:pointer}small{color:#b4c8da}</style><section><strong>Krillion Bot · local MVP</strong><p role="status">Off</p><button id="enable">Enable</button><button id="stop">Stop</button><p><small id="detail">Seed database only</small></p></section>`;
+shadow.innerHTML = `<style>:host{position:fixed;right:12px;top:70px;z-index:2147483647;font:13px system-ui}section{box-sizing:border-box;width:276px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;border:1px solid #3f6c8b;border-radius:8px;background:#102338;color:#e9f5ff;padding:12px;box-shadow:0 3px 16px #0006}p{line-height:1.4;margin:8px 0;overflow-wrap:anywhere}button{font:inherit;margin-right:6px;padding:5px 10px;cursor:pointer}#move-panel{display:block;width:100%;margin:0;padding:0 0 8px;border:0;border-bottom:1px solid #3f6c8b;background:transparent;color:inherit;text-align:left;font-weight:bold;cursor:grab;touch-action:none;user-select:none}small{color:#b4c8da}</style><section><button id="move-panel" aria-label="Move Krillion Bot panel" title="Drag to move, or focus and use arrow keys">⠿ Krillion Bot · local MVP</button><p role="status">Off</p><button id="enable">Enable</button><button id="stop">Stop</button><p><small id="detail">Seed database only</small></p></section>`;
 const render = (status: BotStatus) => {
   current = status;
   shadow.querySelector('p')!.textContent = status.message;
@@ -165,8 +166,10 @@ const observer = new MutationObserver(() => {
 document.addEventListener('input', () => { void bot?.tick(); });
 observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
 window.addEventListener('pagehide', () => {
+  stopDragging();
   observer.disconnect(); clearInterval(joinTimer); chrome.storage?.onChanged?.removeListener(storageChanged); stop();
 });
 window.addEventListener('offline', () => bot?.stop('Offline. Reload and re-enable when connected.'));
 mount();
+const stopDragging = makeDraggablePanel(panel, shadow.querySelector<HTMLElement>('#move-panel')!);
 window.postMessage({ channel: CHANNEL, request: 'snapshot' }, location.origin);

@@ -1,5 +1,7 @@
 # Test checkpoint 2 yourself
 
+The on-page Krillion Bot panel can be moved by dragging its title bar. Its position is remembered in this browser for Krillion and kept inside the viewport on resize. You can also focus the title bar and use arrow keys (Shift for larger steps).
+
 ## Auto-join
 
 Reload the extension and refresh Krillion after updating. In the popup, turn on **Automatically join and keep playing**; this toggle saves immediately, independently of provider settings. It starts off on a new install.
