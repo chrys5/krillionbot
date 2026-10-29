@@ -1,147 +1,90 @@
 # Krillion Bot
 
-A local-first Puffer Party bot, being implemented in checkpoints. See [SPEC.md](SPEC.md) for product scope.
+A local-first Chrome extension that plays [Krillion's Puffer Party](https://krillion.io/party). It prepares answers as soon as a question appears, filters out used or rejected answers, and submits through the game's existing input when it is your turn.
 
-## Checkpoints
+Answers come from a local answer bank, previously accepted answers, cached suggestions, and an optional LLM fallback. Settings, answer history, and diagnostics stay in extension storage; enabling LLM fallback sends questions and answer context to your configured provider.
 
-1. Seed import and incremental updates. **Implemented and verified.**
-2. Unpacked extension gameplay. **User confirmed live success on a Justin Bieber song question.**
-3. Text-only structured LLM generation, persistent suggestion cache and acceptance learning. **Implemented; local verification and live setup in [LLM_TESTING.md](LLM_TESTING.md).**
-4. Bounded LLM retries, failure diagnostics, and stable input preparation (0.3.1). **Implemented and verified locally: 67 tests pass. Live checks remain user-run.**
+## Get started
 
-Pause for review after each checkpoint is implemented and verified. Reconnect/recovery and web search follow the MVP.
+Requires **Node.js 20+**, npm, and **Chrome 111+**.
 
-### Checkpoint 1 verification (October 28, 2026)
+```sh
+npm ci
+```
 
-- Imported all 105 dates listed by the source archive, July 16 through October 28: 735 distinct prompts and 500,047 answer rows. No import failures.
-- Retained the one-time artifact in `data/seed.json` (about 33.6 MB).
-- Ran a second live update: all 105 dates skipped, no daily pages refetched, and the seed file's SHA-256 and last-write time remained unchanged.
-- Passed 11 offline tests, including new-day merging, no-op reruns, failed-day retries, constraint-preserving matching, used/rejected/alias filtering, and malformed-data protection.
-- Verified every indexed prompt returns candidates and excludes a used top answer. Node lookup p95 was 13.94 ms, maximum 192.15 ms; initial file load/validation/indexing took 479 ms in this run. These are development-machine observations, not browser submission guarantees.
-- This was the checkpoint 1 baseline. Later checkpoints add browser support and cached LLM fallback.
+The extension needs a local answer bank at `data/seed.json`. The `data/` directory is excluded from Git. If you already have a seed database, place it there; otherwise, create one from the [Daily answer archive](https://www.linkedinpinpointanswer.today/krillion-answers/archive):
 
-## Test the Chrome extension
+```sh
+npm run seed:update
+```
 
-See [TESTING.md](TESTING.md) for the local helper and real-game checklist.
+The first import fetches the available Daily archive; later runs fetch only missing dates. Data imports are explicit: installing dependencies, building, testing, and playing do not refresh the bank.
 
-```powershell
-npm run test:browser
+Build the extension:
+
+```sh
 npm run build:extension
 ```
 
-The helper runs at `http://127.0.0.1:4173/krillionbot-test/party/TEST`; click **Run checks**. It now includes a mock provider/cache demonstration and clearly labels simulated acceptance. The real unpacked extension is emitted into `build/extension` and starts Off after reload. Configure a provider in the popup to enable new LLM requests; see [LLM_TESTING.md](LLM_TESTING.md).
+1. Open `chrome://extensions` in Chrome and turn on **Developer mode**.
+2. Choose **Load unpacked** and select this checkout's `build/extension` folder.
+3. Open or refresh [Puffer Party](https://krillion.io/party), join a room, and click **Enable** in the Krillion Bot panel.
+4. Click **Stop** to pause the bot. After reloading a tab, click **Enable** again.
 
-Checkpoint 2 baseline: **22 automated tests passed** and packaging was checked. The user subsequently confirmed successful live seed submission. New LLM requests and generated-answer acceptance still need the user's real-provider/game test.
+The bot works with local answers without an API key. To enable new LLM suggestions, open the extension's toolbar popup and configure a provider, model, and API key. It supports Responses and compatible Chat Completions APIs; see the [provider setup guide](LLM_TESTING.md#configure-your-provider). Keys are held in extension session storage and must be re-entered after a browser restart. Generated suggestions become confirmed history only after the game accepts them.
 
-Checkpoint 3 baseline: **39 automated tests passed**, including a deterministic text-only provider, the browser helper using production scripts, cache/history persistence across mocked worker/browser restarts, single-flight request deduplication, rejection/duplicate distinctions and stale-response protection. The user subsequently reported some successful LLM gameplay. Generated answers contain no rarity/type fields.
+The popup also offers optional **Automatically join and keep playing**, automatic recovery for stalled submissions, and diagnostic log export. Auto-join operates inside a room you have opened. See the [usage and troubleshooting guide](TESTING.md) for details. After rebuilding, reload the extension in Chrome and refresh Krillion.
 
-Version **0.3.1** verification: **67 tests pass** across the combined project. Transient provider failures use bounded backoff, adaptive attempt deadlines and `Retry-After`; diagnostics preserve the cause and attempt details. Delayed Send rendering waits rather than immediately stopping. Failed preparations clear abandoned bot text and retry up to three times per turn; manual edits are preserved and stale turns cannot click. The browser helper adds fault scenarios, Send-delay controls and an attempt log. No real API calls or real game acceptance were exercised in this verification. Reload the extension and Krillion, then follow [LLM_TESTING.md](LLM_TESTING.md). Work pauses here for user testing.
+## Architecture
+
+The project is a TypeScript Chrome Manifest V3 extension with Node.js tools for data preparation and testing. Gameplay runs in the browser.
+
+- **Page bridge** observes game WebSocket traffic and relays relevant state and results to the content script.
+- **Content script and controller** track the question, turn, and used answers, prepare a queue, and recheck state before submitting through the game's input and Send button. Manual edits are preserved, and stale work is discarded.
+- **Background worker** resolves answers in order: **seed → confirmed history → cached suggestions → new LLM batch**. It owns provider requests, credentials, and persistent storage. The build splits the seed into a question index and per-question files, so answers load on demand.
+- **Popup and in-page panel** provide configuration, controls, status, and diagnostics.
+
+Question matching normalizes Unicode, case, and whitespace while preserving punctuation and restrictions. Unknown or exhausted questions fall through to the next answer source. Archived scores guide ranking; live game results determine acceptance.
+
+See the [repository map](REPO_MAP.md) for file responsibilities and the [gameplay controller](src/extension/controller.ts) for the core loop.
 
 ## Development
-
-Version **0.3.6** adds automatic recovery for stalled submissions and persistent diagnostic history. Recovery defaults on and can be toggled in the popup. It resets pending work after a five-second timeout, rechecks game/input state, and preserves the three-submission limit per turn. The popup's Diagnostic logs section can view, export, or clear up to 1,000 recent entries within a 1 MiB local budget. Errors, retries, submission outcomes, relevant game/control state and provider diagnostics survive browser restarts; credentials and raw manual input are excluded. See [TESTING.md](TESTING.md) for recovery behavior and reproduction steps.
-
-Version **0.3.7** improves used-answer matching across seed, history, cached suggestions, and the final pre-submit check. Answer matching folds accents, spacing, apostrophes, periods and hyphens, while retaining meaningful symbols and numeric punctuation. A small category-scoped alias list covers country abbreviations/alternate names, selected animal plurals, and vegetable names/plurals. Explicit source aliases propagate in both directions. Spelling/word/letter questions retain strict spelling identity. No edit-distance guessing or blanket stemming is applied. Runtime equivalents do not alter the source bank. Repeat feedback excludes the attempted answer and its known aliases for that category without learning permanent invalidity.
-
-LLM batches now request and retain up to **40 distinct candidates**, with a **1,200-token default** output cap. Saved custom limits remain unchanged; if your popup still shows 400, set **Maximum output tokens** to 1200 and save. Subsequent batches receive used/rejected/unconfirmed answers and equivalents in `excludedAnswers`, plus unexpired previous suggestions and confirmed answers in `previouslySuggestedAnswers`, with instructions to supply fresh alternatives. Prompt/schema version 2 separates these batches from the old generated cache; confirmed history is retained.
-
-Requires Node.js 20+ and npm. Run from this project directory:
 
 ```sh
 npm ci
 npm test
 ```
 
-`npm test` compiles TypeScript and runs offline parser, incremental-import, storage, and lookup tests. Fixtures are reduced examples, not the real seed database. Generated JavaScript goes in `dist/`.
+`npm test` compiles TypeScript into `dist/` and runs offline tests using fixtures and mocked game/provider responses. It does not require a seed database or API key.
 
-After importing real data, run `npm run seed:verify` to check that every indexed prompt resolves, used top answers are excluded, and unknown prompts return no candidates. It also reports local lookup timing; this is not browser/game latency.
-
-## Seed database: create once, update incrementally
-
-The retained artifact is `data/seed.json`, sourced from the [user-provided archive](https://www.linkedinpinpointanswer.today/krillion-answers/archive). It is intended to ship with the extension. Installing dependencies, building, testing, and starting the extension must not scrape or rebuild it.
-
-To explicitly check for new daily dives:
+With `data/seed.json` available, run the browser simulation:
 
 ```sh
-npm run seed:update
+npm run test:browser
 ```
 
-The updater reads the existing file, follows the archive index pagination, and fetches **only missing daily dates**. Existing daily records and their source URLs/scores remain intact. If there is no new data, it does not rewrite `seed.json`. It updates `data/seed.report.json` with import counts and any failures; failed dates remain missing and can be retried by rerunning the same command. A malformed existing database stops the command instead of being replaced with an empty one.
+Open [the local helper](http://127.0.0.1:4173/krillionbot-test/party/TEST) and click **Run checks**. It uses the production browser scripts with simulated game and provider responses. Stop the server with **Ctrl+C**.
 
-The first import fetches all available dates, once. Later runs append newly discovered dates. There is no scheduled refresh yet.
+Useful entry points:
 
-### Themed packs and Unlimited
+| Area | Code / guide |
+| --- | --- |
+| Browser integration and submission | [Content script](src/extension/content.ts), [controller](src/extension/controller.ts), [DOM adapter](src/extension/adapter.ts) |
+| Answer lookup and matching | [Seed resolver](src/resolver/seed-lookup.ts), [answer matching](src/data/answer-matching.ts) |
+| LLM fallback and learning | [Provider adapter](src/llm/provider.ts), [cache/history](src/llm/cache.ts), [LLM testing](LLM_TESTING.md) |
+| Packaging | [Build script](scripts/build-extension.ts), [manifest](extension-assets/manifest.json) |
+| Browser checks and troubleshooting | [Testing guide](TESTING.md) |
 
-Run this separate, explicit command to append public numbered chapters:
+## Answer bank tools
 
-```sh
-npm run seed:packs
-# Optionally check one mode (repeat --pack to select several):
-npm run seed:packs -- --pack lexicon
-```
+These commands maintain or inspect the local database independently of gameplay:
 
-The importer reads each mode's public `/{gameNumber}` metadata and uses `lastGame` to discover the advertised range. It checks every missing `/{gameNumber}/reveal` independently, including chapters after a locked response. A readable reveal must contain seven distinct rounds matching that chapter's metadata, valid scores, and nonempty answer lists before it is saved. Source URL, pack, chapter, round, version, fetch time, original wording, scores, tiers, and any published aliases are retained. No aliases are inferred. Existing chapter snapshots and daily records are preserved. The backward-compatible `chapters` collection is optional in schema version 1; older daily-only seeds still load.
+| Command | Purpose |
+| --- | --- |
+| `npm run seed:update` | Import missing Daily archive dates. |
+| `npm run seed:packs` | Append available public themed-pack and Unlimited reveals; optionally select a mode with `-- --pack lexicon`. |
+| `npm run seed:merge -- --input 'data/answers.json' --skip-companion` | Import a question-keyed JSON export without fetching companion pages. See the [merge implementation](src/data/merge.ts) for the accepted format. |
+| `npm run seed:verify` | Check full-bank lookup coverage and used-answer filtering, and report local lookup timings. |
+| `npm run lookup -- "Name a pasta dish"` | Inspect candidates; add repeated `--used` or `--rejected` flags to exclude answers. |
 
-`data/seed.packs.report.json` records each imported, skipped, locked, unavailable, or failed chapter separately, with its URL and HTTP status when requested. Locked responses are never imported as empty chapters; failed and unavailable chapters remain retryable. A rate limit or server error stops that mode's scan. Imported reveals are skipped on rerun; the chapter-1 metadata request still discovers the current range. A no-op import does not rewrite the seed. Install, build, tests, and extension setup never run either importer.
-
-Live coverage verified October 28, 2026:
-
-| Mode | Advertised chapters checked | Imported | Locked |
-| --- | --- | --- | --- |
-| Movies | 1–30 | 1 | 2–30 |
-| Sports | 1–30 | 1 | 2–30 |
-| Geography | 1–30 | 1 | 2–30 |
-| Lexicon | 1–30 | 1–30 | None |
-| Unlimited | 1–76 | 1 | 2–76 |
-
-The initial 34 imported chapters added 238 question records and 35,084 answer rows to the 105 daily snapshots (500,047 answer rows), bringing that baseline to 968 distinct prompts and 535,131 answer rows. The broader merged bank below retains those original snapshots. These reveals publish no aliases, so their alias arrays are empty. All 162 locked chapters returned HTTP 402; there were zero other unavailable chapters or import failures within the advertised ranges. No claim is made about numbers outside those ranges. `data/seed.verification.json` records the earlier pack preservation checks and a live Lexicon rerun that skipped all 30 chapters, requested only metadata, and left that seed hash and modification time unchanged.
-
-The [companion search](https://krillion-game.com/search/) and [Geography archive](https://krillion-game.com/geography/) were also inspected. All 28 surfaced pack/Unlimited answer pages were verified against their complete answer API responses, including the [published Africa page](https://krillion-game.com/answers/geography/1/r1-country-in-africa/). HTML can contain only the first 50 answers. These companion snapshots differ from current official reveals: three question wordings changed, some answers and scores differ, and Geography lists 301 rows versus 333 in the live official reveal. The comparison is in `data/seed.sources.report.json`; the companion records are now retained as separate collections in the merged bank. The audit found no Lexicon search results. To explicitly repeat this source audit:
-
-```sh
-npm run build
-node dist/scripts/inspect-pack-sources.js
-```
-
-Lookup and extension packaging include every retained source. The initial pack expansion passed 47 offline tests; the merge below extends that validation.
-
-### Merged answer bank (October 29, 2026)
-
-`data/seed.json` now combines the original daily archive, official public pack/Unlimited chapters, the supplied `krillion-answers-2026-10-25 (2).json`, and all 28 previously verified companion answer pages. It contains **1,481 distinct normalized question texts and 994,980 distinct question/answer pairs**, up from 968 and 534,876 before this merge. The 1,191,398 stored answer rows include repeated source observations and conflicting scores. All 4,050 supplied answer notes, per-question first/last-seen timestamps, file SHA-256, local filename, and available companion URL/pack/chapter/round metadata are preserved. Unknown metadata is not inferred for the shared file.
-
-Original daily and official chapter snapshots remain unchanged. Optional `collections` in schema version 1 retain imported sources independently. Lookup combines answers only for exactly matching normalized questions, whose punctuation and restrictions remain significant. Runtime answer equivalents are deduplicated as described above. Conflicting score/tier observations remain stored; selection for the same normalized answer uses official reveal, then daily archive, then shared file, then companion, with the newest observation date breaking ties within a source class. Shared files use each question's original `lastSeen` time rather than its import time. Notes and aliases can enrich matching answers without replacing the preferred score; returned notes carry their own source attribution. There are 1,875 question/answer pairs with conflicting score/tier observations. Shared-file answers are source observations, not proof of current official acceptance or access to a particular locked chapter.
-
-Repeat or add explicit source imports with:
-
-```powershell
-npm run seed:merge -- --input 'data/krillion-answers-2026-10-25 (2).json'
-# Offline file-only import; --input may be repeated:
-npm run seed:merge -- --input 'data/another-source.json' --skip-companion
-```
-
-The shared-file format is the supplied question-keyed JSON export. The entire file is validated before import. Unchanged files are skipped by content hash, and companion URLs already imported are skipped without network requests. A changed file becomes another immutable snapshot. Companion pages use the verified URLs in `data/seed.sources.report.json` and require the full answer API count to match the page before import. Existing companion snapshots are retained on rerun. Failures remain retryable and appear separately in `data/seed.merge.report.json`. A no-op rerun does not rewrite the seed. Nothing imports or regenerates data during setup/build/tests.
-
-The merged bank is about 80 MB. Version **0.3.3** packages it as a small `build/extension/seed/index.json` plus one local answer file per normalized question under `seed/prompts/`. Startup loads only the index; the background worker fetches the matching question on demand and retains only the current question. Repeated turns and retries share that question's pending or completed load; a new question replaces it. Each tab receives only question keys and requested candidates (up to ten eligible seed candidates at a time). Unknown prompts need no answer-file fetch and release the previous question. Ranking, exclusions, aliases, notes and provenance use the same resolver as the full bank. Packaging derives these files locally from `data/seed.json` without importing or changing the retained bank. The local browser helper reads the original bank directly through its development server.
-
-The earlier merge passed 86 automated tests. Every question resolved in that full corpus check, and a repeat merge skipped all 29 sources without changing the seed hash or modification time. Merge verification and preservation evidence are recorded in `data/seed.merge.verification.json`.
-
-Version 0.3.2 passed 89 automated tests and built successfully. Comparing packaged lookups with the original bank produced identical results for all 1,481 questions, both initially and after excluding the top answer and its aliases (2,962 comparisons). The largest question file was 2,356,175 bytes; the question-index message was 61,546 bytes and the largest candidate reply measured 3,667 bytes. The original seed hash stayed unchanged. Local verification details are in `.cache/seed-shards.verification.json`; live Chrome/game acceptance remains a user check after reloading the extension and refreshing Krillion.
-
-For a limited initial import to a separate output:
-
-```sh
-npm run seed:update -- --max-new-days 1 --output .cache/sample-seed.json
-```
-
-Daily pages are parsed using their semantic prompt/tier/answer attributes. Gem explanations are excluded; per-tier counts and all seven prompt blocks must be present before a date is accepted. These checks detect missing markup, not factual errors in the source. Archived Daily answers are candidates for matching Party prompts; live Party acceptance is not yet verified.
-
-## Try a local lookup
-
-```sh
-npm run lookup -- "Name a pasta dish"
-npm run lookup -- "Name a pasta dish" --used "Pastasciutta antifascista"
-```
-
-Use repeated `--used` or `--rejected` flags to exclude multiple answers. Lookup returns up to ten candidates ordered by the selected source's score, then length. Known aliases are also excluded when present. Repeated answers use the source priority described above, with all original observations retained. Prompt matching normalizes case, Unicode, and whitespace and preserves constraints and punctuation. An unknown or exhausted prompt returns an empty list so the next source can be tried later.
-
-Resolution is now seed -> confirmed Party history -> cached unverified suggestions -> a new LLM batch. Generated cache identity includes the exact normalized question, mode, provider/model and prompt/schema version. Batches persist for 24 hours (1 hour for current-fact questions). Keys stay in trusted extension session storage. The seed artifact is extended only through explicit importer commands and is never regenerated on setup. No Google search or related-question matching is implemented.
+Importers preserve existing source snapshots and write reports under `data/`. No-op imports leave the seed unchanged. After updating the bank, rebuild and reload the extension to use it. The [data modules](src/data) and [repository map](REPO_MAP.md) describe parsing, provenance, and source precedence.
