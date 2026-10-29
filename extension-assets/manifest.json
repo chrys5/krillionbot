@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Krillion Bot (local MVP)",
+  "version": "0.3.1",
+  "minimum_chrome_version": "111",
+  "description": "Seed, confirmed history, cached suggestions and configurable LLM fallback for Puffer Party.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://krillion.io/*", "https://api.openai.com/*"],
+  "optional_host_permissions": ["https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Krillion Bot", "default_popup": "popup.html" },
+  "content_scripts": [
+    { "matches": ["https://krillion.io/*"], "js": ["bridge.js"], "run_at": "document_start", "world": "MAIN" },
+    { "matches": ["https://krillion.io/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ]
+}
