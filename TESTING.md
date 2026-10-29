@@ -90,13 +90,13 @@ Seed-based automatic submission has been verified by the user. LLM-generated ans
 - **Preparing answer; waiting for the Send button:** the controller is allowing the game's controlled input to render. It rechecks category, turn, used answers and manual edits before clicking. If Send stays unavailable for 1 second, it removes its own abandoned text and retries, up to three preparations per turn. It stays enabled and resumes on the next turn; manual edits are preserved.
 - **Connection/state interrupted, incomplete used list, or no result:** stop, refresh, and enable again. Recovery is deferred.
 - **Errors:** check the extension's **Errors** button at `chrome://extensions`, the service worker's **Inspect** link, or the Krillion tab's DevTools Console.
-- **Message exceeded maximum allowed size of 64MiB:** rebuild, reload the extension card, and refresh every open Krillion tab. Confirm copied diagnostics show **0.3.2**. This version loads local answers per question and sends only a small index and candidate batches through extension messages.
+- **Message exceeded maximum allowed size of 64MiB:** rebuild, reload the extension card, and refresh every open Krillion tab. Confirm copied diagnostics show **0.3.3**. This version loads local answers per question and sends only a small index and candidate batches through extension messages.
 
 Click **Copy diagnostics** in the in-page bot panel and paste the result back here with what you expected to happen. It includes the bot status, category, phase, and input placeholder; it excludes account credentials, chat, player lists, and socket URLs.
 
 After a code update: run `npm run build:extension`, click **Reload** on the extension card, and refresh Krillion. Avoid Remove/reinstall for ordinary development updates.
 
-After upgrading from the old stuck-input bug, clear any text left by that old version once before enabling. The new controller cannot safely claim ownership of text that predates it. Extension reload clears the session API key; re-enter it in the popup if another LLM request is needed. Confirm diagnostics show version **0.3.2**.
+After upgrading from the old stuck-input bug, clear any text left by that old version once before enabling. The new controller cannot safely claim ownership of text that predates it. Extension reload clears the session API key; re-enter it in the popup if another LLM request is needed. Confirm diagnostics show version **0.3.3**.
 
 Report back with:
 

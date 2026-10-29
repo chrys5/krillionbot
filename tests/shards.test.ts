@@ -54,9 +54,9 @@ test('partitioned lookup preserves ranking, aliases, notes, timestamps and prove
   assert.equal(JSON.stringify(db), original);
 });
 
-test('bundled lookup loads only a matching question, shares concurrent reads, and bounds retained questions', async () => {
+test('bundled lookup shares the current question load and discards previous questions', async () => {
   const data = files(), reads: string[] = [];
-  const seed = new BundledSeed(async path => { reads.push(path); return structuredClone(data.get(path)); }, 1);
+  const seed = new BundledSeed(async path => { reads.push(path); return structuredClone(data.get(path)); });
   assert.deepEqual(await seed.promptKeys(), ['drinks', 'hot drinks']);
   assert.deepEqual(reads, ['seed/index.json']);
   assert.deepEqual(await seed.lookup('unknown'), []);
@@ -67,7 +67,34 @@ test('bundled lookup loads only a matching question, shares concurrent reads, an
   assert.equal(reads.length, 2);
   await seed.lookup('drinks'); assert.equal(reads.length, 2);
   await seed.lookup('hot drinks'); assert.equal(reads.length, 3);
-  await seed.lookup('drinks'); assert.equal(reads.length, 4, 'Evicted question reloads on demand');
+  await seed.lookup('hot drinks'); assert.equal(reads.length, 3, 'Current question stays loaded');
+  await seed.lookup('drinks'); assert.equal(reads.length, 4, 'Previous question reloads on demand');
+  await seed.lookup('unknown'); assert.equal(reads.length, 4);
+  await seed.lookup('drinks'); assert.equal(reads.length, 5, 'Unknown new question also releases the previous question');
+});
+
+test('late completion or failure of a previous question cannot discard the current question', async () => {
+  for (const fail of [false, true]) {
+    const data = files(), reads: string[] = [];
+    let finish!: () => void, started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    const held = new Promise<unknown>((resolve, reject) => {
+      finish = () => fail ? reject(new Error('previous question failed')) : resolve(data.get(`seed/prompts/${'1'.padStart(64, '0')}.json`));
+    });
+    const seed = new BundledSeed(async path => {
+      reads.push(path);
+      if (path === `seed/prompts/${'1'.padStart(64, '0')}.json`) { started(); return held; }
+      return structuredClone(data.get(path));
+    });
+    const previous = seed.lookup('drinks');
+    await reading;
+    await seed.lookup('hot drinks');
+    finish();
+    if (fail) await assert.rejects(previous, /previous question failed/);
+    else assert.equal((await previous)[0]!.text, 'Coffee');
+    assert.equal((await seed.lookup('hot drinks', { used: ['Coffee'] }))[0]!.text, 'Tea');
+    assert.equal(reads.length, 3, 'Latest question stays cached after the earlier request settles');
+  }
 });
 
 test('failed index and question reads retry; mismatched shards and unexpected paths are rejected', async () => {

@@ -28,7 +28,7 @@ for (const [key, database] of shards) {
 await writeFile('build/extension/seed/index.json', JSON.stringify(index));
 await rm('build/extension/seed.json', { force: true });
 await writeFile('build/extension/build-info.json', JSON.stringify({
-  version: '0.3.2', seedSHA256: createHash('sha256').update(seed).digest('hex'),
+  version: '0.3.3', seedSHA256: createHash('sha256').update(seed).digest('hex'),
   seedLayout: 'per-question-v1', seedQuestions: shards.size,
 }, null, 2));
 console.log('Load unpacked: ' + process.cwd() + '/build/extension');
