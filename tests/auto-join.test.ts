@@ -119,6 +119,8 @@ test('production content loads saved auto-join and Stop/Enable pauses and resume
     chrome: { runtime: {
       id: 'test-extension',
       sendMessage: async (request: any) => {
+        if (request.type === 'KRILLIONBOT_LOG') return { saved: true };
+        if (request.type === 'KRILLIONBOT_RECOVERY_CONFIG') return { enabled: true };
         if (request.type === 'KRILLIONBOT_AUTO_JOIN_CONFIG') return { enabled: true };
         if (request.type === 'KRILLIONBOT_SEED') return { promptKeys: [] };
         throw new Error('Unexpected request');
@@ -132,8 +134,8 @@ test('production content loads saved auto-join and Stop/Enable pauses and resume
   dom.window.document.addEventListener('click', event => {
     if (!(event.target as HTMLElement).closest('#krillionbot-controls')) clicks.push((event.target as HTMLElement).textContent!);
   });
-  const send = (type: string) => new Promise(resolve => {
-    for (const listener of listeners) listener({ type }, { id: 'test-extension' }, resolve);
+  const send = (type: string, extra: Record<string, unknown> = {}) => new Promise<any>(resolve => {
+    for (const listener of listeners) listener({ type, ...extra }, { id: 'test-extension' }, resolve);
   });
   try {
     dom.window.eval(bundle.outputFiles[0]!.text);
@@ -146,6 +148,19 @@ test('production content loads saved auto-join and Stop/Enable pauses and resume
     now = 5000; tick(); now = 6000; tick(); assert.deepEqual(clicks, ['JOIN NEXT GAME']);
     await send('KRILLIONBOT_ENABLE');
     tick(); now = 7000; tick(); assert.deepEqual(clicks, ['JOIN NEXT GAME', 'Play again']);
+    await send('KRILLIONBOT_AUTO_JOIN_CHANGED', { enabled: false });
+    const observe = (observation: unknown) => dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+      source: dom.window as unknown as Window, origin: 'https://krillion.io', data: { channel: 'krillionbot:party:v1', observation },
+    }));
+    const restored = { type: 'state', state: { code: 'TEST', version: 2, phase: 'lobby', gameNumber: 1,
+      holderSince: null, category: null, events: [] } };
+    observe({ type: 'disconnected' });
+    assert.equal((await send('KRILLIONBOT_STATUS')).enabled, false);
+    observe(restored);
+    assert.equal((await send('KRILLIONBOT_STATUS')).enabled, true, 'Recovery re-enables on fresh state independently of auto-join');
+    await send('KRILLIONBOT_STOP');
+    observe({ type: 'disconnected' }); observe(restored);
+    assert.equal((await send('KRILLIONBOT_STATUS')).enabled, false, 'Fresh state cannot undo Stop');
   } finally {
     dom.window.dispatchEvent(new dom.window.Event('pagehide')); dom.window.close();
   }

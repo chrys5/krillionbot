@@ -24,6 +24,8 @@ test('popup saves session keys with a blank model, reopens, retains, scopes, and
   let handler!: (message: unknown, sender: unknown, respond: (response: any) => void) => boolean;
   let granted = true;
   let dropSaveResponse = false;
+  const exported: Blob[] = [];
+  const downloads: string[] = [];
   const runtime = {
     id: 'test-extension', getURL: (path: string) => `chrome-extension://test-extension/${path}`,
     onMessage: { addListener: (fn: typeof handler) => { handler = fn; } },
@@ -38,12 +40,15 @@ test('popup saves session keys with a blank model, reopens, retains, scopes, and
     tabs: { query: async () => [] },
   };
   runInNewContext(backgroundBundle.outputFiles[0]!.text, {
-    chrome, URL, AbortController, setTimeout, clearTimeout,
+    chrome, URL, AbortController, setTimeout, clearTimeout, TextEncoder,
     fetch: async () => { assert.fail('Saving settings must not make an API request'); },
   });
   const open = async () => {
     const dom = new JSDOM(html, { runScripts: 'outside-only' });
-    Object.assign(dom.window, { chrome });
+    Object.assign(dom.window, { chrome, Blob });
+    dom.window.URL.createObjectURL = (blob: Blob) => { exported.push(blob); return 'blob:test'; };
+    dom.window.URL.revokeObjectURL = () => {};
+    dom.window.HTMLAnchorElement.prototype.click = function () { downloads.push(this.download); };
     dom.window.eval(popupBundle.outputFiles[0]!.text);
     await until(() => dom.window.document.querySelector('#provider-status')!.textContent!.includes('cache hits'));
     return dom;
@@ -59,6 +64,11 @@ test('popup saves session keys with a blank model, reopens, retains, scopes, and
   try {
     assert.match(keyState(), /No key/);
     assert.equal(field('auto-join').checked, false);
+    await until(() => !field('auto-recovery').disabled);
+    assert.equal(field('auto-recovery').checked, true);
+    field('auto-recovery').checked = false;
+    field('auto-recovery').dispatchEvent(new dom.window.Event('change'));
+    await until(() => !field('auto-recovery').disabled);
     field('auto-join').checked = true;
     field('auto-join').dispatchEvent(new dom.window.Event('change'));
     await until(() => !field('auto-join').disabled);
@@ -74,6 +84,7 @@ test('popup saves session keys with a blank model, reopens, retains, scopes, and
 
     dom.window.close(); dom = await open();
     assert.equal(field('auto-join').checked, true);
+    assert.equal(field('auto-recovery').checked, false);
     assert.match(keyState(), /A key is set/);
     assert.equal(field('api-key').value, '');
     field('model').value = 'mock-model';
@@ -103,6 +114,16 @@ test('popup saves session keys with a blank model, reopens, retains, scopes, and
     field('forget-key').click();
     await until(() => keyState() === 'Key removed.');
     assert.equal(session.has('krillionbot:credential:v1'), false);
+    field('view-logs').click();
+    await until(() => dom.window.document.querySelector('#logs-output')!.textContent!.includes('popup.status'));
+    assert.ok(!dom.window.document.querySelector('#logs-output')!.textContent!.includes('replacement-secret'));
+    field('export-logs').click();
+    await until(() => downloads.length === 1);
+    const exportData = JSON.parse(await exported[0]!.text());
+    assert.ok(exportData.entries.length > 0);
+    assert.match(downloads[0]!, /^krillionbot-logs-.*\.json$/);
+    field('clear-logs').click();
+    await until(() => dom.window.document.querySelector('#logs-status')!.textContent === 'Logs cleared.');
     dom.window.close(); dom = await open();
     assert.match(keyState(), /No key/);
   } finally { dom.window.close(); }

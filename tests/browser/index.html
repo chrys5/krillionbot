@@ -9,6 +9,7 @@
 <button id="mine">Your turn</button><button id="other">Other player's turn</button><button id="used">Opponent uses next answer</button><button id="reject">Reject next answer</button><button id="mock">Mock LLM: off</button><button id="disconnect">Disconnect</button>
 <p><label>Send render delay (ms) <input id="send-delay" type="number" value="0" min="0" max="5000"></label>
 <label><input id="block-send" type="checkbox"> Keep Send unavailable</label></p>
+<p><label><input id="drop-send" type="checkbox"> Drop next submission (test five-second recovery)</label></p>
 <p><label>Mock fault <select id="fault"><option value="normal">Normal</option><option value="timeout-once">First attempt times out</option><option value="rate-once">429 once, then success</option><option value="server-once">503 once, then success</option><option value="network-once">Connection failure once</option><option value="auth">401 bad key</option><option value="json">Malformed JSON</option><option value="empty">Empty candidates</option><option value="timeout-always">Every attempt times out</option></select></label></p>
 <label>Mock response delay (ms) <input id="mock-delay" type="number" value="120" min="0" max="10000"></label>
 <label>Initial mock timeout (ms) <input id="mock-timeout" type="number" value="300" min="20" max="15000"></label>

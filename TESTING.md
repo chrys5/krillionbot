@@ -14,6 +14,16 @@ Rematch, Request rematch, and Accept rematch take precedence over New opponent a
 
 Local tests cover mocked join/replay/wake transitions, duplicate prevention, hidden/disabled controls, setting persistence, and the production content script's Stop/Enable behavior. Live button labels still need verification in Chrome.
 
+## Automatic recovery and persistent logs (0.3.6)
+
+The popup's **Automatically recover stalled submissions** toggle saves immediately and defaults on. If Send receives no result within five seconds, the bot logs the circumstances, discards the pending submission, resets the same work state as Enable, and rechecks the category, turn, used answers and input before trying another eligible answer. It excludes unconfirmed answers for the current category without learning that they are invalid. Bot-owned abandoned input is cleared; manual edits are preserved. The existing three-submission limit per turn remains in force. At the limit the bot stays enabled and waits for another turn or category. If recovery is off, a timeout stops the bot until Enable is pressed.
+
+Accepted-answer events or a changed turn can reconcile a missing acknowledgement without waiting five seconds. On a connection/state interruption, recovery waits for a complete observed game state before re-enabling, independently of auto-join. Stop always cancels recovery. Recovery does not refresh the page or force a socket reconnect; if the game never provides usable state or controls, manual intervention can still be necessary.
+
+The popup's **Diagnostic logs** section has **View logs**, **Export JSON**, and **Clear logs**. History is kept in extension-local storage across tab reloads, worker restarts, and browser restarts. It retains up to 1,000 recent entries within a 1 MiB budget, dropping the oldest when full. Entries include timestamps, extension version, tab/frame when available, error or warning messages, submission/recovery actions, category and game version, turn, pending answer and elapsed time, used/unconfirmed/rejected answers, input/control readiness, recent bot events, and available provider attempt/failure diagnostics. Large contexts are bounded. API keys, authentication fields, chat, player data, URLs, and raw manual-input values are omitted or redacted. Logs stay local until you export and share them. If saving fails, the panel shows a logging warning; logging failure does not stop gameplay.
+
+To reproduce locally, run the browser helper, enable the bot, select **Drop next submission (test five-second recovery)**, then choose **Your turn**. Expect a logged timeout and a different answer after five seconds. Inspect the attempt log. Real extension logs and export controls are tested in the popup; the helper's log is a simulation. In Chrome, reproduce the original stall, reopen the popup, export the JSON, and check `submission.recovery`, `bot.status`, and `provider.lookup` entries.
+
 Updated extension: the user confirmed seed gameplay works. For the new LLM/cache checkpoint, use [LLM_TESTING.md](LLM_TESTING.md). The steps below remain useful for base game controls.
 
 Run commands from the root of your local `krillionbot` checkout in PowerShell. No publishing or Chrome developer account is needed.
@@ -78,7 +88,7 @@ Use a private room with a second player/browser session so you can control the p
 6. Click **Stop** while waiting for a turn. Confirm the next turn does not trigger a submission.
 7. For unknown/exhausted categories, check the source/status and provider configuration; with LLM requests disabled and no usable cache/history, manual entry remains available.
 
-Seed gameplay is user-confirmed. LLM fallback, cached suggestions and confirmed history are now implemented; configure/test them using LLM_TESTING.md. Automatic reconnect and reload recovery remain deferred.
+Seed gameplay is user-confirmed. LLM fallback, cached suggestions and confirmed history are now implemented; configure/test them using LLM_TESTING.md. Recovery can re-enable after a submission timeout or a restored complete game state. Forced reconnects and page reload recovery remain deferred.
 
 Seed-based automatic submission has been verified by the user. LLM-generated answers require separate live acceptance checks. The extension uses normal DOM events and does not alter the game's input telemetry.
 
@@ -90,15 +100,16 @@ Seed-based automatic submission has been verified by the user. LLM-generated ans
 - **No seed question match / Seed answers exhausted:** the bot next checks history/cache/LLM. Copy diagnostics for source/candidate/request counts. Check matching with `npm run lookup -- "exact prompt"`.
 - **Three attempts this turn:** automatic retries are capped at three; you can still enter an answer manually.
 - **Preparing answer; waiting for the Send button:** the controller is allowing the game's controlled input to render. It rechecks category, turn, used answers and manual edits before clicking. If Send stays unavailable for 1 second, it removes its own abandoned text and retries, up to three preparations per turn. It stays enabled and resumes on the next turn; manual edits are preserved.
-- **Connection/state interrupted, incomplete used list, or no result:** stop, refresh, and enable again. Recovery is deferred.
+- **No submission result:** with automatic recovery on, expect a logged reset and another eligible answer, capped at three submissions per turn. With recovery off, Enable retries manually. Export logs if it repeats.
+- **Connection/state interrupted or incomplete used list:** the bot requires complete game state before submitting. After an interruption it can resume when complete state arrives; if none arrives, refresh and enable again. Export logs before refreshing when investigating.
 - **Errors:** check the extension's **Errors** button at `chrome://extensions`, the service worker's **Inspect** link, or the Krillion tab's DevTools Console.
-- **Message exceeded maximum allowed size of 64MiB:** rebuild, reload the extension card, and refresh every open Krillion tab. Confirm copied diagnostics show **0.3.5**. This version loads local answers per question and sends only a small index and candidate batches through extension messages.
+- **Message exceeded maximum allowed size of 64MiB:** rebuild, reload the extension card, and refresh every open Krillion tab. Confirm copied diagnostics show **0.3.6**. This version loads local answers per question and sends only a small index and candidate batches through extension messages.
 
 Click **Copy diagnostics** in the in-page bot panel and paste the result back here with what you expected to happen. It includes the bot status, category, phase, and input placeholder; it excludes account credentials, chat, player lists, and socket URLs.
 
 After a code update: run `npm run build:extension`, click **Reload** on the extension card, and refresh Krillion. Avoid Remove/reinstall for ordinary development updates.
 
-After upgrading from the old stuck-input bug, clear any text left by that old version once before enabling. The new controller cannot safely claim ownership of text that predates it. Extension reload clears the session API key; re-enter it in the popup if another LLM request is needed. Confirm diagnostics show version **0.3.5**.
+After upgrading from the old stuck-input bug, clear any text left by that old version once before enabling. The new controller cannot safely claim ownership of text that predates it. Extension reload clears the session API key; re-enter it in the popup if another LLM request is needed. Confirm diagnostics show version **0.3.6**.
 
 Report back with:
 

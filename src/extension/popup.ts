@@ -1,5 +1,7 @@
 import type { BotStatus } from './controller.js';
 import { validateSettings, type LlmSettings } from '../llm/provider.js';
+import { diagnosticError, diagnosticLevel, sendDiagnostic, VERSION } from './diagnostics.js';
+import { extensionErrorMessage } from './messaging.js';
 
 const label = document.querySelector<HTMLElement>('#status')!;
 async function command(type: string) {
@@ -20,12 +22,42 @@ const input = (id: string) => document.querySelector<HTMLInputElement>(`#${id}`)
 const select = (id: string) => document.querySelector<HTMLSelectElement>(`#${id}`)!;
 const providerStatus = document.querySelector<HTMLElement>('#provider-status')!;
 const saveStatus = document.querySelector<HTMLElement>('#save-status')!;
+for (const target of [label, providerStatus, saveStatus, document.querySelector('#auto-join-status')!, document.querySelector('#recovery-status')!]) {
+  let previous = '';
+  new MutationObserver(() => {
+    const message = target.textContent ?? '';
+    if (message === previous) return;
+    previous = message;
+    const level = diagnosticLevel(message);
+    if (level) void sendDiagnostic({ level, event: 'popup.status', message: extensionErrorMessage(message),
+      context: { operation: target.id, displayedMessage: message } }).catch(() => {
+        document.querySelector('#logs-status')!.textContent = 'Diagnostic log could not be saved.';
+      });
+  }).observe(target, { childList: true, characterData: true, subtree: true });
+}
 const api = async (request: unknown) => {
   const response = await chrome.runtime.sendMessage(request);
   if (response?.error) throw new Error(response.error);
   return response;
 };
 const autoJoinStatus = document.querySelector<HTMLElement>('#auto-join-status')!;
+const recoveryStatus = document.querySelector<HTMLElement>('#recovery-status')!;
+void api({ type: 'KRILLIONBOT_RECOVERY_CONFIG' }).then(result => {
+  input('auto-recovery').checked = result.enabled === true;
+}).catch(() => { recoveryStatus.textContent = 'Could not load recovery settings.'; })
+  .finally(() => { input('auto-recovery').disabled = false; });
+input('auto-recovery').addEventListener('change', async () => {
+  const checkbox = input('auto-recovery');
+  checkbox.disabled = true;
+  try {
+    const result = await api({ type: 'KRILLIONBOT_SAVE_RECOVERY', enabled: checkbox.checked });
+    if (result?.saved !== true) throw new Error('Recovery setting was not saved');
+    recoveryStatus.textContent = result.enabled ? 'Automatic recovery on.' : 'Automatic recovery off.';
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) await chrome.tabs.sendMessage(tab.id, { type: 'KRILLIONBOT_RECOVERY_CHANGED', enabled: result.enabled });
+  } catch { recoveryStatus.textContent = 'Could not update recovery. Reopen the popup and refresh Krillion.'; }
+  finally { checkbox.disabled = false; }
+});
 void api({ type: 'KRILLIONBOT_AUTO_JOIN_CONFIG' }).then(result => {
   input('auto-join').checked = result.enabled === true;
 }).catch(() => { autoJoinStatus.textContent = 'Could not load auto-join settings.'; })
@@ -102,4 +134,48 @@ document.querySelector('#test-llm')!.addEventListener('click', async () => {
       retryAt: result.retryAt, diagnostics: result.diagnostics }, null, 2);
   } catch (error) { providerStatus.textContent = error instanceof Error ? error.message : 'Test failed'; }
   finally { button.disabled = false; }
+});
+
+const logsStatus = document.querySelector<HTMLElement>('#logs-status')!;
+const logsOutput = document.querySelector<HTMLElement>('#logs-output')!;
+const readLogs = async () => {
+  const result = await api({ type: 'KRILLIONBOT_GET_LOGS' });
+  if (!Array.isArray(result?.entries)) throw new Error('Diagnostic logs unavailable');
+  logsStatus.textContent = `${result.entries.length} saved entries. Newest entries appear last.`;
+  return result.entries;
+};
+document.querySelector('#view-logs')!.addEventListener('click', () => {
+  void readLogs().then(entries => { logsOutput.textContent = JSON.stringify(entries, null, 2); })
+    .catch(() => { logsStatus.textContent = 'Could not load logs. Reload the extension and try again.'; });
+});
+document.querySelector('#export-logs')!.addEventListener('click', async () => {
+  try {
+    const entries = await readLogs();
+    const blob = new Blob([JSON.stringify({ version: VERSION, exportedAt: new Date().toISOString(), entries }, null, 2)],
+      { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = `krillionbot-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    logsStatus.textContent = `Exported ${entries.length} entries.`;
+  } catch (error) {
+    logsStatus.textContent = 'Could not export logs. Reload the extension and try again.';
+    void sendDiagnostic({ level: 'error', event: 'logs.export', message: logsStatus.textContent,
+      context: { error: diagnosticError(error) } }).catch(() => {});
+  }
+});
+document.querySelector('#clear-logs')!.addEventListener('click', () => {
+  void api({ type: 'KRILLIONBOT_CLEAR_LOGS' }).then(result => {
+    if (result?.cleared !== true) throw new Error('Clear not confirmed');
+    logsOutput.textContent = ''; logsStatus.textContent = 'Logs cleared.';
+  }).catch(() => { logsStatus.textContent = 'Could not clear logs.'; });
+});
+window.addEventListener('error', event => {
+  void sendDiagnostic({ level: 'error', event: 'popup.exception', message: 'Unhandled popup exception.',
+    context: { error: diagnosticError(event.error), line: event.lineno, column: event.colno } }).catch(() => {});
+});
+window.addEventListener('unhandledrejection', event => {
+  void sendDiagnostic({ level: 'error', event: 'popup.unhandled-rejection', message: 'Unhandled popup promise rejection.',
+    context: { error: diagnosticError(event.reason) } }).catch(() => {});
 });

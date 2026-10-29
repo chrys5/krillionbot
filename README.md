@@ -39,6 +39,8 @@ Version **0.3.1** verification: **67 tests pass** across the combined project. T
 
 ## Development
 
+Version **0.3.6** adds automatic recovery for stalled submissions and persistent diagnostic history. Recovery defaults on and can be toggled in the popup. It resets pending work after a five-second timeout, rechecks game/input state, and preserves the three-submission limit per turn. The popup's Diagnostic logs section can view, export, or clear up to 1,000 recent entries within a 1 MiB local budget. Errors, retries, submission outcomes, relevant game/control state and provider diagnostics survive browser restarts; credentials and raw manual input are excluded. See [TESTING.md](TESTING.md) for recovery behavior and reproduction steps.
+
 Requires Node.js 20+ and npm. Run from this project directory:
 
 ```sh

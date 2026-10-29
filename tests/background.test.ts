@@ -28,7 +28,7 @@ test('background adapter persists batches across restart, keeps keys private, an
         permissions: { contains: async () => true },
         tabs: { sendMessage: async (_tab: number, message: any) => { progressMessages.push(message); } },
       },
-      URL, AbortController, setTimeout, clearTimeout, console,
+      URL, AbortController, setTimeout, clearTimeout, console, TextEncoder,
       fetch: async (url: string, init: RequestInit) => {
         if (url.startsWith('chrome-extension://test-extension/')) seedReads.push(url);
         if (url === 'chrome-extension://test-extension/seed/index.json') return new Response(JSON.stringify({
@@ -62,6 +62,10 @@ test('background adapter persists batches across restart, keeps keys private, an
     return { send, game, popup, handler };
   };
   const worker = startWorker();
+  assert.equal((await worker.send({ type: 'KRILLIONBOT_RECOVERY_CONFIG' })).enabled, true);
+  await worker.send({ type: 'KRILLIONBOT_SAVE_RECOVERY', enabled: false }, worker.popup as any);
+  await worker.send({ type: 'KRILLIONBOT_LOG', entry: { level: 'warning', event: 'submission.timeout',
+    message: 'No submission result.', context: { answer: 'Coffee', apiKey: 'never-log-this', game: { phase: 'round' } } } });
   const seedIndex = await worker.send({ type: 'KRILLIONBOT_SEED' });
   assert.deepEqual(Array.from(seedIndex.promptKeys), ['name a shared seed answer']);
   assert.equal(seedIndex.database, undefined, 'Full source bank is never sent across the extension message channel');
@@ -82,6 +86,13 @@ test('background adapter persists batches across restart, keeps keys private, an
   // A browser restart loses the session key but retains local cache and settings.
   sessionData.clear();
   const restarted = startWorker();
+  assert.equal((await restarted.send({ type: 'KRILLIONBOT_RECOVERY_CONFIG' })).enabled, false);
+  const savedLogs = await restarted.send({ type: 'KRILLIONBOT_GET_LOGS' }, restarted.popup as any);
+  assert.equal(savedLogs.entries[0].event, 'submission.timeout');
+  assert.equal(savedLogs.entries[0].tabId, 7);
+  assert.ok(!JSON.stringify(savedLogs).includes('never-log-this'));
+  const deniedLogRead = await restarted.send({ type: 'KRILLIONBOT_GET_LOGS' });
+  assert.ok(deniedLogRead.error, 'Game tabs cannot read diagnostic history across tabs');
   const cached = await restarted.send({ type: 'KRILLIONBOT_RESOLVE', prompt, excluded: ['Gin'] });
   assert.equal(cached.candidates[0].source, 'cache'); assert.equal(calls, 1);
   assert.deepEqual(Array.from(cached.candidates, (a: any) => a.text), ['Rum', 'Vodka']);
@@ -102,4 +113,8 @@ test('background adapter persists batches across restart, keeps keys private, an
   const cancelled = await pending;
   assert.equal(cancelled.diagnostics.failure.kind, 'cancelled');
   assert.equal(pendingSignal.aborted, true);
+  const providerLogs = await restarted.send({ type: 'KRILLIONBOT_GET_LOGS' }, restarted.popup as any);
+  assert.ok(providerLogs.entries.some((entry: any) => entry.event === 'provider.lookup'));
+  await restarted.send({ type: 'KRILLIONBOT_CLEAR_LOGS' }, restarted.popup as any);
+  assert.equal((await restarted.send({ type: 'KRILLIONBOT_GET_LOGS' }, restarted.popup as any)).entries.length, 0);
 });

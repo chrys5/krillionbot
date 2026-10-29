@@ -75,6 +75,7 @@ async function main() {
   const input = document.querySelector<HTMLInputElement>('input[aria-label="Your answer"]')!;
   const send = document.querySelector<HTMLButtonElement>('[aria-label="Send answer"]')!;
   const rows: { answer: string; accepted: boolean }[] = [];
+  let lastDroppedAnswer = '';
   const transmit = (frame: unknown) => { if (socket.readyState === 1) socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(frame) })); };
   const snapshot = () => { room.version++; transmit({ t: 'snap', room }); };
   const turn = (ours: boolean) => {
@@ -120,7 +121,10 @@ async function main() {
   const listeners = new Set<(message: any, sender: any) => void>();
   const requests = new Map<string, AbortController>();
   Object.defineProperty(window, 'chrome', { configurable: true, value: { runtime: {
-    id: 'local-test', sendMessage: async (request: any) => {
+    id: 'local-test', getURL: (path: string) => `chrome-extension://local-test/${path}`, sendMessage: async (request: any) => {
+      if (request.type === 'KRILLIONBOT_LOG') { attemptLog(`${request.entry.event}: ${request.entry.message}`); return { saved: true }; }
+      if (request.type === 'KRILLIONBOT_RECOVERY_CONFIG') return { enabled: true };
+      if (request.type === 'KRILLIONBOT_AUTO_JOIN_CONFIG') return { enabled: false };
       if (request.type === 'KRILLIONBOT_CANCEL_RESOLVE') { requests.get(request.requestId)?.abort(); return { cancelled: true }; }
       if (request.type === 'KRILLIONBOT_SEED') return { promptKeys: lookup.promptKeys() };
       if (request.type === 'KRILLIONBOT_RECORD') {
@@ -164,6 +168,13 @@ async function main() {
   });
   document.querySelector('#block-send')!.addEventListener('change', updateSend);
   send.addEventListener('click', () => {
+    const drop = document.querySelector<HTMLInputElement>('#drop-send')!;
+    if (drop.checked) {
+      drop.checked = false;
+      lastDroppedAnswer = input.value;
+      attemptLog(`Dropped Send for ${input.value}; waiting for automatic submission recovery.`);
+      return;
+    }
     socket.send(JSON.stringify({ t: 'act', cid: `fixture-${++cid}`, action: { type: 'submit', text: input.value } }));
   });
   const controls = () => document.querySelector('#krillionbot-controls')!.shadowRoot!;
@@ -199,8 +210,8 @@ async function main() {
   button('#reset-mock', resetMock);
   fault.addEventListener('change', () => { scenarioCalls = 0; text('#feedback', 'Fault selected. Reset mock cache before testing to avoid a cache hit.'); });
 
-  const until = async (condition: () => boolean, label: string) => {
-    for (let i = 0; i < 200; i++) { if (condition()) return; await delay(10); }
+  const until = async (condition: () => boolean, label: string, timeoutMs = 2000) => {
+    for (let i = 0; i < timeoutMs / 10; i++) { if (condition()) return; await delay(10); }
     throw new Error(`Timed out: ${label}`);
   };
   const assert = (ok: boolean, label: string) => { if (!ok) throw new Error(label); };
@@ -233,6 +244,14 @@ async function main() {
       assert(controls().querySelector('p')!.textContent !== 'Off', 'Delayed render stopped the bot');
       pass('Delayed Send render waits and submits once without getting stuck');
       document.querySelector<HTMLInputElement>('#send-delay')!.value = '0';
+      reset(); await delay(20); const beforeDroppedSend = rows.length;
+      document.querySelector<HTMLInputElement>('#drop-send')!.checked = true;
+      turn(true);
+      await until(() => rows.length === beforeDroppedSend + 1, 'five-second submission recovery', 7000);
+      assert(rows.at(-1)!.answer !== lastDroppedAnswer, 'Recovery resent the unconfirmed answer');
+      assert(document.querySelector('#attempt-log')!.textContent!.includes('submission.recovery'), 'Recovery was not logged');
+      await delay(60);
+      pass('A dropped Send recovers after five seconds, selects another answer and logs the circumstances');
       reset(); await delay(20); const beforeReject = rows.length; rejectNext = true; turn(true);
       await until(() => rows.length === beforeReject + 2, 'rejection backup');
       assert(rows[beforeReject]!.answer !== rows[beforeReject + 1]!.answer, 'Retried rejected answer');

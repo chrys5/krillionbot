@@ -1,10 +1,12 @@
 import { normalize } from '../data/normalize.js';
 import { BotController, type BotStatus } from './controller.js';
-import { cleanState, type Observation } from './protocol.js';
+import { cleanState, usedAnswers, type Observation } from './protocol.js';
 import type { FallbackResult } from '../llm/cache.js';
 import { backgroundRequest } from './messaging.js';
 import { AUTO_JOIN_KEY, AutoJoin } from './auto-join.js';
 import { makeDraggablePanel } from './draggable-panel.js';
+import { AUTO_RECOVERY_KEY, diagnosticError, diagnosticLevel, sendDiagnostic, VERSION, type DiagnosticEvent } from './diagnostics.js';
+import { extensionErrorMessage } from './messaging.js';
 
 const CHANNEL = 'krillionbot:party:v1';
 let bot: BotController | null = null;
@@ -17,10 +19,23 @@ let autoJoinPaused = false;
 let resumeAnswers = false;
 let resumeAfterDisconnect = false;
 let autoJoinRevision = 0;
+let autoRecoveryEnabled = true;
+let recoveryRevision = 0;
 let current: BotStatus = { enabled: false, message: 'Off', prompt: '', lastAnswer: '', submissions: 0 };
 const panel = document.createElement('div');
 panel.id = 'krillionbot-controls';
 const shadow = panel.attachShadow({ mode: 'open' });
+let logFailure = false;
+const recordDiagnostic = (event: DiagnosticEvent) => {
+  void sendDiagnostic({ ...event, context: { page: location.pathname,
+    game: latest?.type === 'state' ? latest.state : null, status: current,
+    ...(event.context && typeof event.context === 'object' ? event.context : { detail: event.context }) } }).catch(() => {
+    if (!logFailure) console.warn('Krillion Bot diagnostic log could not be saved.');
+    logFailure = true;
+    const notice = shadow.querySelector('#log-status');
+    if (notice) notice.textContent = 'Diagnostic log unavailable. Reload the extension and refresh Krillion.';
+  });
+};
 shadow.innerHTML = `<style>:host{position:fixed;right:12px;top:70px;z-index:2147483647;font:13px system-ui}section{box-sizing:border-box;width:276px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;border:1px solid #3f6c8b;border-radius:8px;background:#102338;color:#e9f5ff;padding:12px;box-shadow:0 3px 16px #0006}p{line-height:1.4;margin:8px 0;overflow-wrap:anywhere}button{font:inherit;margin-right:6px;padding:5px 10px;cursor:pointer}#move-panel{display:block;width:100%;margin:0;padding:0 0 8px;border:0;border-bottom:1px solid #3f6c8b;background:transparent;color:inherit;text-align:left;font-weight:bold;cursor:grab;touch-action:none;user-select:none}small{color:#b4c8da}</style><section><button id="move-panel" aria-label="Move Krillion Bot panel" title="Drag to move, or focus and use arrow keys">⠿ Krillion Bot · local MVP</button><p role="status">Off</p><button id="enable">Enable</button><button id="stop">Stop</button><p><small id="detail">Seed database only</small></p></section>`;
 const render = (status: BotStatus) => {
   current = status;
@@ -29,9 +44,15 @@ const render = (status: BotStatus) => {
     `${status.eligible ?? 0} queued · ${status.source ?? 'local lookup'} · ${status.llmRequests ?? 0} LLM calls · ${status.cacheHits ?? 0} cache hits`;
 };
 const autoJoinLabel = document.createElement('p');
+const logStatus = document.createElement('p');
+logStatus.id = 'log-status';
+shadow.querySelector('section')!.append(logStatus);
 autoJoinLabel.textContent = 'Auto-join off.';
 shadow.querySelector('section')!.append(autoJoinLabel);
-const autoJoin = new AutoJoin(document, message => { autoJoinLabel.textContent = message; });
+const autoJoin = new AutoJoin(document, message => {
+  autoJoinLabel.textContent = message;
+  recordDiagnostic({ level: diagnosticLevel(message) ?? 'info', event: 'auto-join.status', message });
+});
 const configureAutoJoin = (enabled: boolean) => {
   autoJoinRevision++;
   autoJoinEnabled = enabled; autoJoinPaused = false;
@@ -42,10 +63,24 @@ void backgroundRequest({ type: 'KRILLIONBOT_AUTO_JOIN_CONFIG' }).then(result => 
     autoJoinEnabled = result.enabled;
     if (!autoJoinPaused) autoJoin.setEnabled(result.enabled);
   }
-}).catch(() => { autoJoinLabel.textContent = 'Could not load auto-join. Reopen the popup and refresh Krillion.'; });
+}).catch(() => {
+  autoJoinLabel.textContent = 'Could not load auto-join. Reopen the popup and refresh Krillion.';
+  recordDiagnostic({ level: 'error', event: 'auto-join.config', message: autoJoinLabel.textContent });
+});
 const storageChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
   if (area === 'local' && AUTO_JOIN_KEY in changes) configureAutoJoin(changes[AUTO_JOIN_KEY]!.newValue === true);
+  if (area === 'local' && AUTO_RECOVERY_KEY in changes) {
+    recoveryRevision++;
+    autoRecoveryEnabled = changes[AUTO_RECOVERY_KEY]!.newValue !== false;
+    bot?.setAutoRecovery(autoRecoveryEnabled);
+  }
 };
+void backgroundRequest({ type: 'KRILLIONBOT_RECOVERY_CONFIG' }).then(result => {
+  if (recoveryRevision === 0 && typeof result.enabled === 'boolean') {
+    autoRecoveryEnabled = result.enabled;
+    bot?.setAutoRecovery(autoRecoveryEnabled);
+  }
+}).catch(() => recordDiagnostic({ level: 'error', event: 'recovery.config', message: 'Could not load automatic recovery settings.' }));
 chrome.storage?.onChanged?.addListener(storageChanged);
 const joinTimer = setInterval(() => { autoJoin.tick(); }, 500);
 const isParty = () => /^\/party(?:\/|$)/.test(location.pathname) || location.pathname.startsWith('/krillionbot-test/');
@@ -95,10 +130,16 @@ async function enable() {
           const response = await backgroundRequest({ type: 'KRILLIONBOT_RECORD', prompt, answer, result });
           if (response.saved !== true) throw new Error('History save was not confirmed');
         },
-      });
-    } catch (error) { render({ ...current, message: String(error) }); return; }
+      }, undefined, recordDiagnostic);
+    } catch (error) {
+      const message = extensionErrorMessage(error);
+      render({ ...current, message });
+      recordDiagnostic({ level: 'error', event: 'bot.enable', message });
+      return;
+    }
   }
   if (token !== generation) return;
+  bot.setAutoRecovery(autoRecoveryEnabled);
   if (latest) bot.observe(latest);
   bot.enable();
   window.postMessage({ channel: CHANNEL, request: 'snapshot' }, location.origin);
@@ -119,7 +160,7 @@ diagnostics.textContent = 'Copy diagnostics';
 shadow.querySelector('section')!.append(diagnostics);
 diagnostics.addEventListener('click', () => {
   const state = latest?.type === 'state' ? latest.state : null;
-  const safe = { version: '0.3.5', status: current, autoJoin: { enabled: autoJoinEnabled, paused: autoJoinPaused, message: autoJoinLabel.textContent },
+  const safe = { version: VERSION, status: current, autoJoin: { enabled: autoJoinEnabled, paused: autoJoinPaused, message: autoJoinLabel.textContent },
     game: state ? { phase: state.phase, category: state.category, observedVersion: state.version } : null,
     input: document.querySelector<HTMLInputElement>('.pf-root input[aria-label="Your answer"]')?.placeholder ?? null };
   void navigator.clipboard.writeText(JSON.stringify(safe, null, 2)).then(
@@ -142,14 +183,22 @@ window.addEventListener('message', event => {
   if (observation.type !== 'result') latest = observation;
   if (observation.type === 'disconnected') resumeAfterDisconnect ||= resumeAnswers && !!bot?.getStatus().enabled;
   bot?.observe(observation);
-  if (observation.type === 'state' && resumeAfterDisconnect) {
+  if (observation.type === 'state' && resumeAfterDisconnect && usedAnswers(observation.state) !== null &&
+      resumeAnswers && (autoRecoveryEnabled || autoJoinEnabled && !autoJoinPaused)) {
     resumeAfterDisconnect = false;
-    if (autoJoinEnabled && !autoJoinPaused && resumeAnswers) bot?.enable();
+    recordDiagnostic({ level: 'info', event: 'recovery.state-restored', message: 'Fresh complete game state received; re-enabling the bot.' });
+    bot?.enable();
   }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
+  if (message.type === 'KRILLIONBOT_RECOVERY_CHANGED' && typeof message.enabled === 'boolean') {
+    recoveryRevision++;
+    autoRecoveryEnabled = message.enabled;
+    bot?.setAutoRecovery(autoRecoveryEnabled);
+    respond({ saved: true }); return;
+  }
   if (message.type === 'KRILLIONBOT_AUTO_JOIN_CHANGED' && typeof message.enabled === 'boolean') {
     configureAutoJoin(message.enabled); respond({ saved: true }); return;
   }
@@ -169,7 +218,20 @@ window.addEventListener('pagehide', () => {
   stopDragging();
   observer.disconnect(); clearInterval(joinTimer); chrome.storage?.onChanged?.removeListener(storageChanged); stop();
 });
-window.addEventListener('offline', () => bot?.stop('Offline. Reload and re-enable when connected.'));
+window.addEventListener('offline', () => {
+  recordDiagnostic({ level: 'warning', event: 'browser.offline', message: 'Browser went offline.' });
+  resumeAfterDisconnect ||= resumeAnswers && !!bot?.getStatus().enabled;
+  bot?.stop('Offline. Reload and re-enable when connected.');
+});
+window.addEventListener('error', event => {
+  if (!event.filename?.startsWith(chrome.runtime.getURL(''))) return;
+  recordDiagnostic({ level: 'error', event: 'extension.exception', message: extensionErrorMessage(event.error),
+    context: { error: diagnosticError(event.error), line: event.lineno, column: event.colno } });
+});
+window.addEventListener('unhandledrejection', event => {
+  recordDiagnostic({ level: 'error', event: 'extension.unhandled-rejection', message: extensionErrorMessage(event.reason),
+    context: { error: diagnosticError(event.reason) } });
+});
 mount();
 const stopDragging = makeDraggablePanel(panel, shadow.querySelector<HTMLElement>('#move-panel')!);
 window.postMessage({ channel: CHANNEL, request: 'snapshot' }, location.origin);

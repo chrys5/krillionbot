@@ -7,6 +7,7 @@ import type { FallbackResult } from '../src/llm/cache.js';
 import { PartyFeed, cleanState, usedAnswers, type PartyState } from '../src/extension/protocol.js';
 import { SeedLookup } from '../src/resolver/seed-lookup.js';
 import { emptyDatabase } from '../src/data/update.js';
+import type { DiagnosticEvent } from '../src/extension/diagnostics.js';
 
 const PROMPT = 'Name a pasta dish';
 test('fallback errors explain recovery in status and copied events without exposing raw secrets', async () => {
@@ -37,7 +38,7 @@ function state(index = 1): PartyState {
   return { code: 'TEST', version: 1, phase: 'round', gameNumber: 1, holderSince: 100,
     category: { index, text: PROMPT, accepted: 0 }, events: [{ seq: 1, kind: 'category', index }] };
 }
-function setup(fallback?: Fallback, timing?: InputTiming) {
+function setup(fallback?: Fallback, timing?: InputTiming, diagnostics: DiagnosticEvent[] = []) {
   const dom = new JSDOM(html, { url: 'https://krillion.io/party/TEST' });
   const document = dom.window.document;
   const input = document.querySelector('input')!;
@@ -53,7 +54,8 @@ function setup(fallback?: Fallback, timing?: InputTiming) {
       { text: 'Third', score: 60, tier: 'rare', aliases: [] },
     ],
   }] };
-  const bot = new BotController(document, new SeedLookup(database), () => {}, fallback, timing);
+  const bot = new BotController(document, new SeedLookup(database), () => {}, fallback, timing,
+    event => diagnostics.push(structuredClone(event)));
   const close = () => { bot.stop(); dom.window.close(); };
   return { dom, document, input, button, submissions, bot, close };
 }
@@ -122,6 +124,81 @@ test('confirmed rejection retries a backup; acceptance latches the turn', async 
     f.input.value = '';
     f.bot.observe({ type: 'result', answer: 'Second', category: 'TEST:1:1', accepted: true, why: '' });
     await wait(20); await f.bot.tick(); assert.equal(f.submissions.length, 2);
+  } finally { f.close(); }
+});
+
+const recoveryTiming = { readyTimeoutMs: 100, retryDelayMs: 10, submissionTimeoutMs: 50 };
+test('missing submission results recover automatically, exclude uncertain answers and remain bounded', async () => {
+  const diagnostics: DiagnosticEvent[] = [], learned: string[] = [];
+  const f = setup({ resolve: async () => ({ candidates: [], message: 'No suggestions', requests: 0, cacheHits: 0, networkUsed: false }),
+    record: async (_prompt, _answer, result) => { learned.push(result); } }, recoveryTiming, diagnostics);
+  try {
+    f.bot.observe({ type: 'state', state: state() }); f.bot.enable();
+    await until(() => f.bot.getStatus().message.includes('Three attempts'), 'bounded submission recovery');
+    assert.deepEqual(f.submissions, ['First', 'Second', 'Third']);
+    assert.equal(f.bot.getStatus().enabled, true);
+    assert.equal(f.bot.getStatus().submissionTimeouts, 3);
+    assert.equal(f.input.value, '');
+    assert.deepEqual(learned, [], 'A missing acknowledgement never proves an answer invalid');
+    assert.equal(diagnostics.filter(event => event.event === 'submission.recovery').length, 3);
+    const context = diagnostics.find(event => event.event === 'submission.recovery')!.context as any;
+    assert.equal(context.pending.answer, 'First'); assert.equal(context.pending.turn, 100);
+    assert.equal(context.game.version, 1); assert.equal(context.dom.ourTurn, true);
+    const next = state(2); next.holderSince = 200;
+    f.bot.observe({ type: 'state', state: next });
+    await until(() => f.submissions.length === 4, 'recovery at the next category');
+    assert.equal(f.submissions[3], 'First');
+  } finally { f.close(); }
+});
+
+test('missing acknowledgement reconciles accepted answers and turn changes without stale retries', async () => {
+  const f = setup(undefined, recoveryTiming);
+  try {
+    f.bot.observe({ type: 'state', state: state() }); f.bot.enable();
+    await until(() => f.submissions.length === 1, 'initial send');
+    const next = state(); next.version = 2; next.holderSince = 200;
+    next.category!.accepted = 1; next.events.push({ seq: 2, kind: 'pass', answer: 'First alias' });
+    f.input.placeholder = 'other player is up…';
+    f.bot.observe({ type: 'state', state: next });
+    await wait(80);
+    assert.deepEqual(f.submissions, ['First']); assert.equal(f.bot.getStatus().enabled, true);
+    f.input.placeholder = 'your puffer — type!'; next.holderSince = 300;
+    f.bot.observe({ type: 'state', state: { ...next } });
+    await until(() => f.submissions.length === 2, 'next turn after lost acknowledgement');
+    assert.deepEqual(f.submissions, ['First', 'Second']);
+  } finally { f.close(); }
+});
+
+test('timeout preserves manual edits and Stop cancels automatic recovery', async () => {
+  for (const action of ['edit', 'stop', 'off', 'phase']) {
+    const f = setup(undefined, recoveryTiming);
+    try {
+      if (action === 'off') f.bot.setAutoRecovery(false);
+      f.bot.observe({ type: 'state', state: state() }); f.bot.enable();
+      await until(() => f.submissions.length === 1, 'send before timeout');
+      if (action === 'edit') {
+        f.input.value = 'My manual answer';
+        f.input.dispatchEvent(new f.dom.window.Event('input', { bubbles: true }));
+      }
+      if (action === 'stop') f.bot.stop();
+      if (action === 'phase') { const next = state(); next.phase = 'over'; f.bot.observe({ type: 'state', state: next }); }
+      await wait(100);
+      assert.deepEqual(f.submissions, ['First']);
+      if (action === 'edit') assert.equal(f.input.value, 'My manual answer');
+      assert.equal(f.bot.getStatus().enabled, action === 'edit' || action === 'phase');
+    } finally { f.close(); }
+  }
+});
+
+test('late acknowledgements cannot clear a newer pending submission', async () => {
+  const f = setup(undefined, recoveryTiming);
+  try {
+    f.bot.observe({ type: 'state', state: state() }); f.bot.enable();
+    await until(() => f.submissions.length === 2, 'second send after timeout');
+    f.bot.observe({ type: 'result', answer: 'First', category: 'TEST:1:1', accepted: false, why: 'miss' });
+    f.bot.observe({ type: 'result', answer: 'Second', category: 'TEST:1:1', accepted: true, why: '' });
+    await wait(80);
+    assert.deepEqual(f.submissions, ['First', 'Second']); assert.equal(f.bot.getStatus().enabled, true);
   } finally { f.close(); }
 });
 

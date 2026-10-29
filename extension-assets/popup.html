@@ -2,6 +2,10 @@
 <style>body{font:14px system-ui;width:350px;padding:14px;background:#102338;color:#e9f5ff}h1{font-size:20px;margin:0}p{line-height:1.5}button{font:inherit;padding:7px 10px;margin:4px 4px 4px 0;cursor:pointer}small{color:#b4c8da}label{display:block;margin:9px 0}input:not([type=checkbox]),select{box-sizing:border-box;width:100%;padding:6px;margin-top:3px}fieldset{margin-top:14px;border:1px solid #456078}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:160px;overflow:auto}</style>
 </head><body><h1>Krillion Bot</h1><p id="status" role="status">Open Puffer Party in the active tab.</p>
 <button id="enable">Enable</button><button id="stop">Stop</button>
+<fieldset><legend>Recovery</legend>
+<label><input id="auto-recovery" type="checkbox" disabled> Automatically recover stalled submissions</label>
+<small>On by default. Rechecks the game and resets pending work after a five-second submission timeout. Tries up to three submissions per turn, preserves manual edits, and never resumes after Stop.</small>
+<p id="recovery-status" role="status"></p></fieldset>
 <fieldset><legend>Auto-join</legend>
 <label><input id="auto-join" type="checkbox" disabled> Automatically join and keep playing</label>
 <small>Uses available join, Play again, New opponent, Rematch, and Wake puffer controls in any Puffer Party mode. Toggle saves immediately. Stop pauses auto-join in this tab; Enable resumes it.</small>
@@ -32,4 +36,9 @@
 <pre id="provider-status">Save a model and key before testing. A cache miss can make a paid API request.</pre>
 </fieldset>
 <p><small>Refresh Krillion after updating the extension. Reloading a tab turns the bot off. Settings take effect on the next fallback; Stop/Enable retries a miss.</small></p>
+<fieldset><legend>Diagnostic logs</legend>
+<small>Saved locally across reloads and browser restarts. Keeps up to 1,000 recent entries within 1 MiB. Includes game and retry context; excludes credentials, chat and manually typed input.</small>
+<p><button id="view-logs">View logs</button><button id="export-logs">Export JSON</button><button id="clear-logs">Clear logs</button></p>
+<p id="logs-status" role="status"></p><pre id="logs-output"></pre>
+</fieldset>
 <script src="popup.js"></script></body></html>

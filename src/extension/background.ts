@@ -2,6 +2,8 @@ import { AnswerCache, type KeyValueStore } from '../llm/cache.js';
 import { DEFAULT_SETTINGS, createGenerator, validateSettings, type LlmSettings } from '../llm/provider.js';
 import { BundledSeed } from '../resolver/bundled-seed.js';
 import { AUTO_JOIN_KEY } from './auto-join.js';
+import { AUTO_RECOVERY_KEY, diagnosticError, DiagnosticLog } from './diagnostics.js';
+import { extensionErrorMessage } from './messaging.js';
 
 const SETTINGS = 'krillionbot:settings:v1';
 const CREDENTIAL = 'krillionbot:credential:v1';
@@ -14,6 +16,10 @@ const store = (area: chrome.storage.StorageArea): KeyValueStore => ({
   set: async (key, value) => { await area.set({ [key]: value }); },
 });
 const cache = new AnswerCache(store(chrome.storage.local), store(chrome.storage.session), createGenerator());
+const diagnostics = new DiagnosticLog(store(chrome.storage.local), async () => {
+  const key = (await chrome.storage.session.get(CREDENTIAL))[CREDENTIAL];
+  return typeof key?.apiKey === 'string' ? [key.apiKey] : [];
+});
 const lookups = new Map<string, AbortController>();
 const seed = new BundledSeed(async path => {
   const response = await fetch(chrome.runtime.getURL(path));
@@ -44,6 +50,20 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
   if (lookupAbort && requestKey) lookups.set(requestKey, lookupAbort);
   const run = async () => {
     await ready;
+    if (request.type === 'KRILLIONBOT_LOG') {
+      await diagnostics.append(request.entry, { ...(sender.tab?.id === undefined ? {} : { tabId: sender.tab.id }),
+        ...(sender.frameId === undefined ? {} : { frameId: sender.frameId }) });
+      return { saved: true };
+    }
+    if (request.type === 'KRILLIONBOT_GET_LOGS' && isPopup) return { entries: await diagnostics.read() };
+    if (request.type === 'KRILLIONBOT_CLEAR_LOGS' && isPopup) { await diagnostics.clear(); return { cleared: true }; }
+    if (request.type === 'KRILLIONBOT_RECOVERY_CONFIG') {
+      return { enabled: (await chrome.storage.local.get(AUTO_RECOVERY_KEY))[AUTO_RECOVERY_KEY] !== false };
+    }
+    if (request.type === 'KRILLIONBOT_SAVE_RECOVERY' && isPopup && typeof request.enabled === 'boolean') {
+      await chrome.storage.local.set({ [AUTO_RECOVERY_KEY]: request.enabled });
+      return { saved: true, enabled: request.enabled };
+    }
     if (request.type === 'KRILLIONBOT_AUTO_JOIN_CONFIG') {
       return { enabled: (await chrome.storage.local.get(AUTO_JOIN_KEY))[AUTO_JOIN_KEY] === true };
     }
@@ -92,7 +112,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
       if (candidates.length) return { candidates, message: 'Seed candidates available; no provider request needed.',
         networkUsed: false, ...await cache.metrics() };
       const config = await settings();
-      return cache.resolve(request.prompt, excludedAnswers(request.excluded), config, await credential(config), request.allowNetwork !== false, {
+      const result = await cache.resolve(request.prompt, excludedAnswers(request.excluded), config, await credential(config), request.allowNetwork !== false, {
         ...(lookupAbort ? { signal: lookupAbort.signal } : {}),
         onProgress: progress => {
           if (sender.tab?.id !== undefined && request.requestId) {
@@ -101,10 +121,32 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
           }
         },
       });
+      if (result.diagnostics?.failure || result.diagnostics?.attempts.some(attempt => attempt.outcome === 'failed')) {
+        await diagnostics.append({ level: result.diagnostics.failure ? 'warning' : 'info', event: 'provider.lookup',
+          message: result.message, context: { prompt: request.prompt, requestId: request.requestId,
+            excluded: excludedAnswers(request.excluded), diagnostics: result.diagnostics, networkUsed: result.networkUsed } },
+          sender.tab?.id === undefined ? {} : { tabId: sender.tab.id }).catch(() => {});
+      }
+      return result;
     }
     throw new Error('Unsupported extension request');
   };
-  run().then(respond, error => respond({ error: error instanceof Error ? error.message : 'Extension request failed' }))
+  run().then(respond, async error => {
+    if (request.type !== 'KRILLIONBOT_LOG') await diagnostics.append({ level: 'error', event: 'background.request',
+      message: extensionErrorMessage(error), context: { requestType: request.type, requestId: request.requestId,
+        prompt: request.prompt, excludedCount: excludedAnswers(request.excluded).length, error: diagnosticError(error) } },
+      sender.tab?.id === undefined ? {} : { tabId: sender.tab.id }).catch(() => {});
+    respond({ error: error instanceof Error ? error.message : 'Extension request failed' });
+  })
     .finally(() => { if (requestKey && lookups.get(requestKey) === lookupAbort) lookups.delete(requestKey); });
   return true;
+});
+
+globalThis.addEventListener?.('error', event => {
+  void diagnostics.append({ level: 'error', event: 'background.exception', message: 'Unhandled background exception.',
+    context: { error: diagnosticError(event.error), line: event.lineno, column: event.colno } }).catch(() => {});
+});
+globalThis.addEventListener?.('unhandledrejection', event => {
+  void diagnostics.append({ level: 'error', event: 'background.unhandled-rejection', message: 'Unhandled background promise rejection.',
+    context: { error: diagnosticError(event.reason) } }).catch(() => {});
 });
