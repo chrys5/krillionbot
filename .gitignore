@@ -40,3 +40,7 @@ yarn-error.log*
 ._*
 Thumbs.db
 Desktop.ini
+
+# Personal planning notes and scratch tasks
+/.notes/
+/todo.txt

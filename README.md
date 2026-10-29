@@ -31,9 +31,9 @@ npm run build:extension
 3. Open or refresh [Puffer Party](https://krillion.io/party), join a room, and click **Enable** in the Krillion Bot panel.
 4. Click **Stop** to pause the bot. After reloading a tab, click **Enable** again.
 
-The bot works with local answers without an API key. To enable new LLM suggestions, open the extension's toolbar popup and configure a provider, model, and API key. It supports Responses and compatible Chat Completions APIs; see the [provider setup guide](LLM_TESTING.md#configure-your-provider). Keys are held in extension session storage and must be re-entered after a browser restart. Generated suggestions become confirmed history only after the game accepts them.
+The bot works with local answers without an API key. To enable new LLM suggestions, open the extension's toolbar popup and configure a provider, model, and API key. It supports Responses and compatible Chat Completions APIs; see the [provider setup guide](docs/llm.md#configure-your-provider). Keys are held in extension session storage and must be re-entered after a browser restart. Generated suggestions become confirmed history only after the game accepts them.
 
-The popup also offers optional **Automatically join and keep playing**, automatic recovery for stalled submissions, and diagnostic log export. Auto-join operates inside a room you have opened. See the [usage and troubleshooting guide](TESTING.md) for details. After rebuilding, reload the extension in Chrome and refresh Krillion.
+The popup also offers optional **Automatically join and keep playing**, automatic recovery for stalled submissions, and diagnostic log export. Auto-join operates inside a room you have opened. See the [usage and troubleshooting guide](docs/testing.md) for details. After rebuilding, reload the extension in Chrome and refresh Krillion.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ The project is a TypeScript Chrome Manifest V3 extension with Node.js tools for 
 
 Question matching normalizes Unicode, case, and whitespace while preserving punctuation and restrictions. Unknown or exhausted questions fall through to the next answer source. Archived scores guide ranking; live game results determine acceptance.
 
-See the [repository map](REPO_MAP.md) for file responsibilities and the [gameplay controller](src/extension/controller.ts) for the core loop.
+See the [architecture guide](docs/architecture.md) for file responsibilities and the [gameplay controller](src/extension/controller.ts) for the core loop.
 
 ## Development
 
@@ -65,15 +65,15 @@ npm run test:browser
 
 Open [the local helper](http://127.0.0.1:4173/krillionbot-test/party/TEST) and click **Run checks**. It uses the production browser scripts with simulated game and provider responses. Stop the server with **Ctrl+C**.
 
-Useful entry points:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and focused checks. Useful entry points:
 
 | Area | Code / guide |
 | --- | --- |
 | Browser integration and submission | [Content script](src/extension/content.ts), [controller](src/extension/controller.ts), [DOM adapter](src/extension/adapter.ts) |
 | Answer lookup and matching | [Seed resolver](src/resolver/seed-lookup.ts), [answer matching](src/data/answer-matching.ts) |
-| LLM fallback and learning | [Provider adapter](src/llm/provider.ts), [cache/history](src/llm/cache.ts), [LLM testing](LLM_TESTING.md) |
+| LLM fallback and learning | [Provider adapter](src/llm/provider.ts), [cache/history](src/llm/cache.ts), [LLM testing](docs/llm.md) |
 | Packaging | [Build script](scripts/build-extension.ts), [manifest](extension-assets/manifest.json) |
-| Browser checks and troubleshooting | [Testing guide](TESTING.md) |
+| Browser checks and troubleshooting | [Testing guide](docs/testing.md) |
 
 ## Answer bank tools
 
@@ -87,4 +87,4 @@ These commands maintain or inspect the local database independently of gameplay:
 | `npm run seed:verify` | Check full-bank lookup coverage and used-answer filtering, and report local lookup timings. |
 | `npm run lookup -- "Name a pasta dish"` | Inspect candidates; add repeated `--used` or `--rejected` flags to exclude answers. |
 
-Importers preserve existing source snapshots and write reports under `data/`. No-op imports leave the seed unchanged. After updating the bank, rebuild and reload the extension to use it. The [data modules](src/data) and [repository map](REPO_MAP.md) describe parsing, provenance, and source precedence.
+Importers preserve existing source snapshots and write reports under `data/`. No-op imports leave the seed unchanged. After updating the bank, rebuild and reload the extension to use it. The [data modules](src/data) and [architecture guide](docs/architecture.md) describe parsing, provenance, and source precedence.

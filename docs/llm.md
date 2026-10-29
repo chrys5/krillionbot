@@ -1,8 +1,8 @@
-# Checkpoint 3 follow-up (0.3.1): retries and stable input preparation
+# LLM configuration and testing
 
-Seed gameplay and some LLM answers were confirmed by the user. Version 0.3.1 addresses the reported 2-second timeouts, opaque cooldowns, and input getting stuck before Send becomes ready. Immediate submission when ready is retained. Related-category retrieval, reconnects and search remain deferred.
+Configure an optional provider for questions without usable local answers. The extension supports Responses and compatible Chat Completions APIs.
 
-## What is implemented
+## Answer resolution
 
 Resolution order:
 
@@ -19,18 +19,18 @@ Each request asks for up to 40 distinct candidate **strings**, aiming for 40 whe
 
 The adapter sends the exact question, simple parsed constraints and excluded answers. Code validates shape, maximum length (60 characters), duplicates, and recognized prefix/suffix, quoted-substring, word-length and letter-bank constraints. It cannot establish factual correctness or game acceptance. Actual game feedback does that.
 
-The default output cap is 1,200 tokens. Saved limits are preserved: if the popup still shows 400, set **Maximum output tokens** to 1200 and save for larger batches. Defaults are a **5-second initial attempt**, **up to 3 HTTP attempts per lookup**, and a **15-second total retry budget**. Existing timeout settings (including 2000 ms) are preserved: use the popup's **Request limits** to change them. If a model spends its output budget on reasoning, use a faster text model or explicitly raise the cap. Provider capabilities and access must be checked against your account.
+The default output cap is 1,200 tokens. Saved limits are preserved; use **Maximum output tokens** to adjust the cap. Defaults are a **5-second initial attempt**, **up to 3 HTTP attempts per lookup**, and a **15-second total retry budget**. Use the popup's **Request limits** to change these settings. If a model spends its output budget on reasoning, use a faster text model or explicitly raise the cap. Provider capabilities and access must be checked against your account.
 
 The prompt includes `excludedAnswers` (used, rejected, unconfirmed and recent invalid answers, expanded with known equivalents; up to 1,000 strings) and `previouslySuggestedAnswers` (unexpired cached suggestions and confirmed history, expanded with equivalents; up to 500 strings). The model is asked to avoid alternate names and spelling/plural variants and supply fresh alternatives. Shared requests still apply each caller's current exclusions locally when results arrive.
 
-Answer matching handles accents/formatting plus a small category-specific set of country names, animal plurals, and vegetable equivalents. Source aliases are bidirectional and carry into fallback exclusions. Spelling/word/letter questions use strict spelling comparisons; symbols and numeric distinctions remain significant. This is deterministic matching, not general semantic or typo inference. New regression tests cover equivalent answers across seed/cache/history, an opponent's answer arriving during input preparation, repeat aliases, and second-batch prompt context. Reload the extension and refresh Krillion for live verification.
+Answer matching handles accents/formatting plus a small category-specific set of country names, animal plurals, and vegetable equivalents. Source aliases are bidirectional and carry into fallback exclusions. Spelling/word/letter questions use strict spelling comparisons; symbols and numeric distinctions remain significant. This is deterministic matching, not general semantic or typo inference. Tests cover equivalent answers across seed/cache/history, used-answer changes during input preparation, repeat aliases, and second-batch prompt context.
 
 ## Retry policy
 
 - Timeouts and connection failures, HTTP 408/409/429 and server errors can retry. Attempt deadlines double, constrained by the remaining total budget and a 15-second per-attempt cap. Thus an initial 2000 ms can grow to 4000 and 8000 ms when the budget permits.
-- Backoff starts at 100 ms, doubles, and adds up to 25% jitter (100–125 ms before the second attempt, 200–250 ms before the third). After a transiently failed lookup, the next batch can retry after 250 ms. Request timeouts and attempt/session limits are unchanged. A provider's `Retry-After` is the minimum wait. Longer server delays are shown and scheduled outside the current lookup budget; they are also preserved across worker recreation within this browser session.
+- Backoff starts at 100 ms, doubles, and adds up to 25% jitter (100–125 ms before the second attempt, 200–250 ms before the third). After a transiently failed lookup, the next batch can retry after 250 ms. A provider's `Retry-After` is the minimum wait. Longer server delays are shown and scheduled outside the current lookup budget; they are also preserved across worker recreation within this browser session.
 - Empty output and non-retryable failures have a 2.5-second local cooldown before another manual attempt (Test LLM / cache or Stop/Enable). These failures do not automatically retry; provider-required delays still take precedence.
-- Authentication, request configuration, billing/quota, malformed JSON, incomplete output, and completed-but-empty output do **not** automatically retry. The precise failure remains visible, rather than conflating timeout with empty results. These misses have a 30-second hold to prevent repeated calls; saving corrected settings clears that hold, while respecting a server's outstanding `Retry-After`.
+- Authentication, request configuration, billing/quota, malformed JSON, incomplete output, and completed-but-empty output do **not** automatically retry. The precise failure remains visible, rather than conflating timeout with empty results. Saving corrected settings clears the local failure cooldown while respecting an outstanding server `Retry-After`.
 - The active category can start at most **two lookup chains**, each with bounded attempts. Only retryable failures schedule another chain. Repeated page updates do not restart it. There are at most **100 HTTP attempts per browser session**, including retries; explicit Stop/Enable resets the category allowance but not the session cap.
 - Simultaneous requests for the same cache key share a retry chain. Each caller can cancel; the provider is aborted when no callers remain. Stop/category changes cancel stale retries and prevent submission. Client cancellation/timeout cannot guarantee that the provider has stopped processing or billing an attempt.
 - Cached candidates and confirmed history are checked before provider delays or new calls. Retry settings do not change the generated-answer cache identity.
@@ -52,13 +52,13 @@ For the browser helper, open `http://127.0.0.1:4173/krillionbot-test/party/TEST`
 - Delayed Send rendering while the controller retains a single pending preparation.
 - Timeout, 429, 503 and network recovery; bad key, malformed JSON, empty output and repeated-timeout failures with bounded attempts.
 
-These are **simulated** provider responses and game acceptances. The production provider adapter, cache and browser scripts are used, but the helper makes no requests to a real LLM or Krillion. Manual controls now include a question selector, rejection feedback and a Mock LLM switch; controls are disabled until setup finishes and during the automated sequence. Manual submission is checked against the helper's seed/mock lists, so arbitrary text is no longer automatically accepted. That simulated validation is not the real game's validator.
+These are **simulated** provider responses and game acceptances. The production provider adapter, cache and browser scripts are used, but the helper makes no requests to a real LLM or Krillion. Manual controls include a question selector, rejection feedback and a Mock LLM switch; controls are disabled until setup finishes and during the automated sequence. Manual submission is checked against the helper's seed/mock lists, so arbitrary text is not automatically accepted. That simulated validation is not the real game's validator.
 
 To try manual mock generation: choose **Unseeded spirits question**, turn **Mock LLM** on, click **Enable**, and leave it on the other player's turn until the bot is ready. Use **Your turn** to simulate submission. Reset the same question to observe history/cache reuse. The helper uses its own localStorage namespace; it does not access the actual extension's history or API key. The automated sequence clears only its disposable check namespace; the manual namespace persists across page reloads.
 
 Node tests also exercise a restarted worker with retained local storage and a cleared session key, cache expiry, simultaneous request deduplication, question/model/provider separation, acceptance learning, scoped invalid evidence, duplicate handling, errors and stale-response protection.
 
-### Reproduce the reported failures locally
+### Fault scenarios
 
 1. Click **Unseeded spirits question**, switch **Mock LLM** on, and choose **First attempt times out** under **Mock fault**.
 2. Click **Reset mock cache/history and failures**, then **Enable**. Expect attempt 1 to time out, attempt 2 to succeed, and the attempt log to explain the retry. Resetting the question again should use the cached batch without another call.
@@ -69,7 +69,7 @@ Node tests also exercise a restarted worker with retained local storage and a cl
 
 These controls use a 3-second total mock LLM budget and a 300 ms initial mock timeout by default, to keep local drills quick. They do not change your real extension settings.
 
-## Load the new extension
+## Build and reload the extension
 
 ```powershell
 npm run build:extension
@@ -79,7 +79,7 @@ Reload the existing unpacked extension at `chrome://extensions`, then refresh Kr
 
 `build/extension`
 
-This update adds storage and OpenAI API host access. Other HTTPS API hosts are requested only when you save that host in the popup. Do not remove/reinstall for routine updates: removal clears extension storage.
+The extension requests storage and OpenAI API host access. Other HTTPS API hosts are requested only when you save that host in the popup. Do not remove/reinstall for routine updates: removal clears extension storage.
 
 ## Configure your provider
 
@@ -99,7 +99,7 @@ The key is held in `chrome.storage.session`, confined to trusted extension conte
 
 Leave the game bot stopped while doing this test:
 
-1. In the popup, choose an exact question with no usable seed/history/cache candidates. The default spirits question may now be seeded; a `seed` or `history` result correctly avoids the API.
+1. In the popup, choose an exact question with no usable seed/history/cache candidates. The default spirits question may be seeded; a `seed` or `history` result correctly avoids the API.
 2. Click **Test LLM / cache**. On a fresh unseeded question, expect a candidates list, source `llm` and the request count to increase. It increases once per HTTP attempt, including retries. This can incur API charges.
 3. Click the same test again. Expect source `cache`, a larger cache-hit count, and **no increase in LLM request count**.
 4. Close/reopen the popup and repeat. The cached batch should still be used.
@@ -130,6 +130,6 @@ The observer also learns visible canonical answers from actual pass events while
 - **Copy diagnostics** includes recent status events, queue preview, counts, input preparation failures, current retry progress and the last lookup's attempt deadlines, elapsed times, failure kinds/statuses, retry delays and retry availability. Model/API format and token limits are included; response bodies and credentials are excluded.
 - After correcting settings for a current miss, **Save settings**, then Stop/Enable to retry. Transient errors have bounded automatic retries. For repeated failures, diagnostics distinguish timeout, network, rate limit, authentication, invalid JSON, incomplete output and empty output.
 
-Real API availability, latency and acceptance of generated answers need your live test. Automated verification uses deterministic mocks and does not claim real acceptance.
+Automated tests use deterministic mocks. Real provider availability, latency, and game acceptance require the live checks above.
 
 Official API references used for the adapter: [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses), [API errors](https://developers.openai.com/api/docs/guides/error-codes), [Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create), and [Chrome storage](https://developer.chrome.com/docs/extensions/reference/api/storage).
